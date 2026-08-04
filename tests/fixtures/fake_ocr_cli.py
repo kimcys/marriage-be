@@ -65,6 +65,12 @@ def _write_fake_xlsx(path: Path) -> None:
         )
 
 
+def _write_fake_json(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fixture = Path("tests/fixtures/ocr_records.json").read_text(encoding="utf-8")
+    path.write_text(fixture, encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("command")
@@ -82,6 +88,7 @@ def main() -> int:
 
     if mode == "success":
         _write_fake_xlsx(Path(args.output))
+        _write_fake_json(Path(args.output).with_suffix(".json"))
         return 0
     if mode == "failure":
         print("\x1b[31mfake ocr failed\x1b[0m", file=sys.stderr)

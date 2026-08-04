@@ -107,6 +107,10 @@ def test_executor_processes_job_with_fresh_session(tmp_path: Path) -> None:
         def run(self, request: OCRRunRequest) -> OCRRunResult:
             request.output_path.parent.mkdir(parents=True, exist_ok=True)
             request.output_path.write_bytes(b"fake-xlsx")
+            request.output_path.with_suffix(".json").write_text(
+                Path("tests/fixtures/ocr_records.json").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
             return OCRRunResult(return_code=0, timed_out=False, duration_seconds=0.01)
 
     from marriage_ocr_api.jobs.executor import JobExecutor

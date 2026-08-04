@@ -8,6 +8,7 @@ from sqlalchemy import engine_from_config, pool
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.models import OCRJob  # noqa: F401
+from marriage_ocr_api.records.models import OCRRecord, RecordRevision  # noqa: F401
 
 config = context.config
 
@@ -18,6 +19,9 @@ target_metadata = Base.metadata
 
 
 def get_database_url() -> str:
+    configured_url = config.get_main_option("sqlalchemy.url")
+    if configured_url:
+        return configured_url
     return Settings().database_url
 
 

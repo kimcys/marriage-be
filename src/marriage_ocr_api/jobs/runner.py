@@ -86,6 +86,8 @@ class SubprocessOCRRunner:
         ]
 
     def _working_dir(self) -> Path:
+        if self.settings.ocr_module.startswith("tests.") and Path("/app").exists():
+            return Path("/app")
         if self._working_directory is not None:
             return self._working_directory
         upstream_checkout = Path("/opt/marriage-ocr")
@@ -125,6 +127,15 @@ class SubprocessOCRRunner:
 
         command = self._build_command(request)
         env = os.environ.copy()
+        source_root = Path(__file__).resolve().parents[3]
+        app_root = Path("/app")
+        pythonpath = env.get("PYTHONPATH")
+        path_entries = [str(app_root)]
+        if source_root != app_root:
+            path_entries.append(str(source_root))
+        if pythonpath:
+            path_entries.append(pythonpath)
+        env["PYTHONPATH"] = os.pathsep.join(path_entries)
         start = time.monotonic()
         with request.stdout_log_path.open("wb") as stdout_log, request.stderr_log_path.open("wb") as stderr_log:
             process = self._popen(

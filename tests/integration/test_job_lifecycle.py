@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -51,6 +52,9 @@ def test_fake_cli_success(tmp_path: Path, monkeypatch) -> None:
     assert failure_code_for_run(result, request.output_path) is None
     assert request.output_path.is_file()
     assert request.output_path.stat().st_size > 0
+    sidecar = request.output_path.with_suffix(".json")
+    assert sidecar.is_file()
+    assert len(json.loads(sidecar.read_text(encoding="utf-8"))["records"]) == 2
 
 
 def test_fake_cli_failure_sanitizes_stderr(tmp_path: Path, monkeypatch) -> None:

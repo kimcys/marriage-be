@@ -145,6 +145,8 @@ docker compose down -v
 
 The repository also includes mocked tests and health checks so CI and local development do not require real Google credentials.
 
+The Docker build and Compose defaults pin the upstream OCR checkout to `ad8235c5186c100dea723f7d6a011150dfd18dad`, which matches the current `origin/main` of `marriage-ocr`.
+
 ## Troubleshooting
 
 - Missing credentials: verify `GOOGLE_APPLICATION_CREDENTIALS` points to a readable JSON file.
@@ -160,4 +162,3 @@ For production, the natural next steps are:
 1. Replace `JobExecutor` with a durable worker queue such as Valkey/Celery.
 2. Move local storage to object storage such as DigitalOcean Spaces.
 3. Keep the current HTTP and database contract so the frontend does not need to change.
-

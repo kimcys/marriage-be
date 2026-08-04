@@ -1,7 +1,7 @@
 FROM python:3.12-slim AS builder
 
 ARG MARRIAGE_OCR_GIT_URL=https://github.com/kimcys/marriage-ocr.git
-ARG MARRIAGE_OCR_GIT_REF=06902e69447dae6bd47f8829842e9e68d1e96296
+ARG MARRIAGE_OCR_GIT_REF=ad8235c5186c100dea723f7d6a011150dfd18dad
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -26,7 +26,7 @@ RUN git clone "${MARRIAGE_OCR_GIT_URL}" /opt/marriage-ocr \
 
 RUN pip install --upgrade pip \
     && pip install /opt/marriage-ocr \
-    && pip install .
+    && pip install ".[dev]"
 
 FROM python:3.12-slim AS final
 
@@ -46,8 +46,14 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /opt/marriage-ocr /opt/marriage-ocr
 COPY --from=builder /build /app
+COPY tests /app/tests
 
 RUN mkdir -p /app/storage \
+    && ln -sf /opt/venv/bin/alembic /usr/local/bin/alembic \
+    && ln -sf /opt/venv/bin/mypy /usr/local/bin/mypy \
+    && ln -sf /opt/venv/bin/pytest /usr/local/bin/pytest \
+    && ln -sf /opt/venv/bin/ruff /usr/local/bin/ruff \
+    && ln -sf /opt/venv/bin/uvicorn /usr/local/bin/uvicorn \
     && chown -R app:app /app /opt/venv /opt/marriage-ocr
 
 USER app
@@ -55,4 +61,3 @@ USER app
 EXPOSE 8000
 
 CMD ["uvicorn", "marriage_ocr_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
-

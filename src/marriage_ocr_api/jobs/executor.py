@@ -18,6 +18,7 @@ from marriage_ocr_api.jobs.runner import (
     failure_code_for_run,
     read_sanitized_stderr,
 )
+from marriage_ocr_api.records.importer import import_records_from_json
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ class JobExecutor:
                         paths.output_relative_path,
                         completed_at,
                     )
+                    import_records_from_json(session, job_id, paths.output_result_path.with_suffix(".json"))
                     session.commit()
                 return
 

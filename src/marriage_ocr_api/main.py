@@ -10,8 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from marriage_ocr_api.api.errors import ApiError, build_error_response
-from marriage_ocr_api.api.routers.health import router as health_router
-from marriage_ocr_api.api.routers.jobs import router as jobs_router
+from marriage_ocr_api.api.routers import health_router, jobs_router, records_router
 from marriage_ocr_api.core.config import Settings, get_settings
 from marriage_ocr_api.core.logging import configure_logging
 from marriage_ocr_api.core.request_id import (
@@ -61,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_tags=[
             {"name": "health", "description": "Liveness and readiness endpoints"},
             {"name": "jobs", "description": "OCR job submission and retrieval"},
+            {"name": "records", "description": "OCR record review and correction"},
         ],
     )
     app.add_middleware(RequestIdMiddleware)
@@ -119,6 +119,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(jobs_router)
+    app.include_router(records_router)
     return app
 
 
