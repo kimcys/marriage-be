@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-marriage_ocr}
+      POSTGRES_USER: ${POSTGRES_USER:-marriage_ocr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-marriage_ocr}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-marriage_ocr} -d ${POSTGRES_DB:-marriage_ocr}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      args:
+        MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
+        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-06902e69447dae6bd47f8829842e9e68d1e96296}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_NAME: ${APP_NAME:-Marriage OCR API}
+      APP_ENV: ${APP_ENV:-development}
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      API_V1_PREFIX: ${API_V1_PREFIX:-/api/v1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4200}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-marriage_ocr}:${POSTGRES_PASSWORD:-marriage_ocr}@postgres:5432/${POSTGRES_DB:-marriage_ocr}
+      STORAGE_ROOT: /app/storage
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-104857600}
+      UPLOAD_CHUNK_BYTES: ${UPLOAD_CHUNK_BYTES:-1048576}
+      OCR_PYTHON_EXECUTABLE: /opt/venv/bin/python
+      OCR_MODULE: ${OCR_MODULE:-marriage_ocr.cli}
+      OCR_CONFIG_PATH: /opt/marriage-ocr/config/production.yaml
+      OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-3600}
+      OCR_MAX_CONCURRENT_JOBS: 1
+      OCR_STDERR_API_LIMIT: ${OCR_STDERR_API_LIMIT:-1000}
+      MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
+      MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-06902e69447dae6bd47f8829842e9e68d1e96296}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-vision.json
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    volumes:
+      - ./storage:/app/storage
+      - ${GOOGLE_APPLICATION_CREDENTIALS:-./secrets/google-vision.json}:/run/secrets/google-vision.json:ro
+    ports:
+      - "8000:8000"
+    command:
+      - /bin/sh
+      - -c
+      - alembic upgrade head && exec uvicorn marriage_ocr_api.main:app --host 0.0.0.0 --port 8000 --workers 1
+
+volumes:
+  postgres_data:
+

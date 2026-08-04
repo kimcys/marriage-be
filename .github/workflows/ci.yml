@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: marriage_ocr
+          POSTGRES_USER: marriage_ocr
+          POSTGRES_PASSWORD: marriage_ocr
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marriage_ocr -d marriage_ocr"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://marriage_ocr:marriage_ocr@localhost:5432/marriage_ocr
+      STORAGE_ROOT: /tmp/marriage-ocr-storage
+      OCR_CONFIG_PATH: /tmp/marriage-ocr-config/production.yaml
+      OCR_PYTHON_EXECUTABLE: /usr/bin/python3
+      OCR_MODULE: tests.fixtures.fake_ocr_cli
+      OCR_MAX_CONCURRENT_JOBS: 1
+      MARRIAGE_OCR_GIT_URL: https://github.com/kimcys/marriage-ocr.git
+      MARRIAGE_OCR_GIT_REF: 06902e69447dae6bd47f8829842e9e68d1e96296
+      GOOGLE_APPLICATION_CREDENTIALS: /tmp/fake-google.json
+      GEMINI_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Prepare readiness files
+        run: |
+          mkdir -p /tmp/marriage-ocr-config
+          printf 'ok: true\n' > /tmp/marriage-ocr-config/production.yaml
+          printf '{}' > /tmp/fake-google.json
+      - name: Ruff format check
+        run: ruff format --check .
+      - name: Ruff lint
+        run: ruff check .
+      - name: Mypy
+        run: mypy src
+      - name: Alembic upgrade
+        run: alembic upgrade head
+      - name: Pytest
+        run: pytest -q
+
