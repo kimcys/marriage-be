@@ -1454,6 +1454,40 @@
       }
     },
     "/api/v1/exports/{export_id}": {
+      "delete": {
+        "operationId": "delete_export",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "export_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Export Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete One Export",
+        "tags": [
+          "exports"
+        ]
+      },
       "get": {
         "operationId": "get_export",
         "parameters": [
@@ -1892,6 +1926,23 @@
       "get": {
         "operationId": "list_records",
         "parameters": [
+          {
+            "in": "query",
+            "name": "batch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Batch Id"
+            }
+          },
           {
             "in": "query",
             "name": "status",

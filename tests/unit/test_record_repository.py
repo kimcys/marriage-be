@@ -90,9 +90,9 @@ def test_create_get_and_list_records(session: Session) -> None:
     assert fetched.source_key == "page-1-row-1"
     assert fetched.status == RecordStatus.PENDING_REVIEW.value
 
-    records = list_records(session, job_id=job_id, status=None, limit=20, offset=0)
+    records = list_records(session, job_id=job_id, batch_id=None, status=None, limit=20, offset=0)
     assert [record.id for record in records] == [newer.id, older.id]
-    assert count_records(session, job_id=job_id, status=None) == 2
+    assert count_records(session, job_id=job_id, batch_id=None, status=None) == 2
 
 
 def test_append_revision_tracks_history(session: Session) -> None:

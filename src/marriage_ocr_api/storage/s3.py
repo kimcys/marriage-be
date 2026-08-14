@@ -19,15 +19,29 @@ class S3StorageService(StorageService):
     access_key_id: str
     secret_access_key: str
     storage_root: Path = field(default_factory=lambda: Path("./var/storage"))
+    connect_timeout_seconds: float = 10.0
+    read_timeout_seconds: float = 60.0
+    max_attempts: int = 3
 
     def __post_init__(self) -> None:
+        # Every document upload and export write (when STORAGE_BACKEND=s3) runs
+        # this client synchronously inside a request-handling thread. Without
+        # explicit timeouts, a stalled connection to the S3-compatible endpoint
+        # hangs for boto3's long legacy defaults, tying up a request thread per
+        # stuck call -- the same class of gap already fixed for Vision/Gemini
+        # in the marriage-ocr OCR engine.
         client = boto3.client(
             "s3",
             endpoint_url=self.endpoint_url,
             region_name=self.region_name,
             aws_access_key_id=self.access_key_id,
             aws_secret_access_key=self.secret_access_key,
-            config=BotoConfig(signature_version="s3v4"),
+            config=BotoConfig(
+                signature_version="s3v4",
+                connect_timeout=self.connect_timeout_seconds,
+                read_timeout=self.read_timeout_seconds,
+                retries={"mode": "standard", "max_attempts": self.max_attempts},
+            ),
         )
         object.__setattr__(self, "_client", client)
 

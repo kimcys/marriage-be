@@ -11,7 +11,11 @@ from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.repositories import count_exports, get_batch, get_export, list_exports
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.exports.response_models import ExportCreateRequest, ExportResponse, PaginatedExports
-from marriage_ocr_api.exports.service import build_export_download_response, create_export_artifact
+from marriage_ocr_api.exports.service import (
+    build_export_download_response,
+    create_export_artifact,
+    delete_export_artifact,
+)
 
 router = APIRouter(prefix="/api/v1/exports", tags=["exports"])
 
@@ -98,3 +102,16 @@ def download_export(
         return build_export_download_response(export, settings)
     except FileNotFoundError as exc:
         raise ApiError(410, "EXPORT_FILE_MISSING", "The expected export file is missing.") from exc
+
+
+@router.delete("/{export_id}", status_code=204, operation_id="delete_export")
+def delete_one_export(
+    export_id: UUID,
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(settings_dependency),
+) -> Response:
+    export = get_export(session, export_id)
+    if export is None:
+        raise _export_not_found(export_id)
+    delete_export_artifact(session, settings, export)
+    return Response(status_code=204)

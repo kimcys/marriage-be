@@ -97,10 +97,18 @@ def _create_document_page_jobs(
     staging_dir = input_path.parent / "pages"
     page_paths = split_pdf_into_pages(input_path, staging_dir)
     job_ids: list[UUID] = []
+    # Each page-job's files live under storage_root/jobs/{job_id}/, entirely
+    # outside the document's own directory tree. If job creation fails
+    # partway through a multi-page PDF (DB error, disk pressure), the
+    # caller's cleanup only removes the document's own directory -- these
+    # already-created per-page job directories would otherwise be silently
+    # orphaned on disk forever. Track and remove them here too.
+    created_job_roots: list[Path] = []
     try:
         for page_number, page_source_path in enumerate(page_paths, start=1):
             page_job_id = uuid4()
             job_paths = build_job_paths(settings.storage_root, page_job_id, ".pdf")
+            created_job_roots.append(job_paths.job_root)
             job_paths.input_dir.mkdir(parents=True, exist_ok=True)
             # Keep the "page-N.pdf" name (rather than job_paths' generic "source.pdf")
             # so the input file stays traceable to its original page on disk.
@@ -126,6 +134,10 @@ def _create_document_page_jobs(
                 ocr_git_ref=settings.marriage_ocr_git_ref,
             )
             job_ids.append(page_job_id)
+    except Exception:
+        for job_root in created_job_roots:
+            shutil.rmtree(job_root, ignore_errors=True)
+        raise
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
     return job_ids

@@ -46,13 +46,14 @@ def _conflict(message: str) -> ApiError:
 
 @router.get("/api/v1/records", response_model=PaginatedRecords, operation_id="list_records")
 def list_all_records(
+    batch_id: UUID | None = Query(default=None),
     status: RecordStatus | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> PaginatedRecords:
-    items = list_records(session, job_id=None, status=status, limit=limit, offset=offset)
-    total = count_records(session, job_id=None, status=status)
+    items = list_records(session, job_id=None, batch_id=batch_id, status=status, limit=limit, offset=offset)
+    total = count_records(session, job_id=None, batch_id=batch_id, status=status)
     return build_records_page(items, limit, offset, total)
 
 
@@ -68,8 +69,8 @@ def list_job_records(
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> PaginatedRecords:
-    items = list_records(session, job_id=job_id, status=status, limit=limit, offset=offset)
-    total = count_records(session, job_id=job_id, status=status)
+    items = list_records(session, job_id=job_id, batch_id=None, status=status, limit=limit, offset=offset)
+    total = count_records(session, job_id=job_id, batch_id=None, status=status)
     return build_records_page(items, limit, offset, total)
 
 

@@ -112,6 +112,27 @@ services:
       - -c
       - "exec celery -A marriage_ocr_api.jobs.celery_app worker --loglevel=info --concurrency=${OCR_MAX_CONCURRENT_JOBS:-4}"
 
+  beat:
+    build:
+      context: .
+      args:
+        MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
+        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-ad8235c5186c100dea723f7d6a011150dfd18dad}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    environment:
+      <<: *ocr-common-env
+    volumes:
+      - ./storage:/app/storage
+      - ${GOOGLE_APPLICATION_CREDENTIALS:-./secrets/google-vision.json}:/run/secrets/google-vision.json:ro
+    command:
+      - /bin/sh
+      - -c
+      - "exec celery -A marriage_ocr_api.jobs.celery_app beat --loglevel=info"
+
 volumes:
   postgres_data:
   valkey_data:

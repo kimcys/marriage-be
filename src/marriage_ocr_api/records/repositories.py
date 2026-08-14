@@ -166,6 +166,7 @@ def list_records(
     session: Session,
     *,
     job_id: UUID | None,
+    batch_id: UUID | None,
     status: RecordStatus | None,
     limit: int,
     offset: int,
@@ -173,16 +174,26 @@ def list_records(
     stmt: Select[tuple[OCRRecord]] = select(OCRRecord)
     if job_id is not None:
         stmt = stmt.where(OCRRecord.job_id == job_id)
+    if batch_id is not None:
+        stmt = stmt.where(OCRRecord.batch_id == batch_id)
     if status is not None:
         stmt = stmt.where(OCRRecord.status == status.value)
     stmt = stmt.order_by(OCRRecord.created_at.desc(), OCRRecord.id.desc()).limit(limit).offset(offset)
     return list(session.scalars(stmt))
 
 
-def count_records(session: Session, *, job_id: UUID | None, status: RecordStatus | None) -> int:
+def count_records(
+    session: Session,
+    *,
+    job_id: UUID | None,
+    batch_id: UUID | None,
+    status: RecordStatus | None,
+) -> int:
     stmt = select(func.count()).select_from(OCRRecord)
     if job_id is not None:
         stmt = stmt.where(OCRRecord.job_id == job_id)
+    if batch_id is not None:
+        stmt = stmt.where(OCRRecord.batch_id == batch_id)
     if status is not None:
         stmt = stmt.where(OCRRecord.status == status.value)
     return int(session.scalar(stmt) or 0)

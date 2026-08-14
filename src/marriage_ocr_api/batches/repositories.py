@@ -225,3 +225,20 @@ def list_exports(session: Session, limit: int, offset: int) -> list[Export]:
 
 def count_exports(session: Session) -> int:
     return int(session.scalar(select(func.count()).select_from(Export)) or 0)
+
+
+def delete_export(session: Session, export: Export) -> None:
+    session.delete(export)
+    session.flush()
+
+
+def list_stale_exports(session: Session, older_than: datetime) -> list[Export]:
+    """Exports older than the retention window, for periodic cleanup.
+
+    Every export write creates a brand-new file (local disk or S3) and DB
+    row with no expiry -- nothing else in this codebase ever deletes an
+    export, so at 1M-record scale with routine re-exports during review,
+    this is unbounded storage growth from day one.
+    """
+    stmt: Select[tuple[Export]] = select(Export).where(Export.created_at < older_than)
+    return list(session.scalars(stmt))

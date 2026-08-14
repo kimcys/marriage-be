@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import UUID
@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from marriage_ocr_api.batches.models import Export
 from marriage_ocr_api.batches.repositories import create_export as create_export_record
+from marriage_ocr_api.batches.repositories import delete_export as delete_export_record
+from marriage_ocr_api.batches.repositories import list_stale_exports
 from marriage_ocr_api.batches.schemas import ExportFormat
 from marriage_ocr_api.batches.status import ExportStatus
 from marriage_ocr_api.core.config import Settings
@@ -112,6 +114,17 @@ def create_export_artifact(
         export.storage_key = stored.key
         export.record_count = len(rows)
         export.completed_at = utcnow()
+        if not rows:
+            # A batch with nothing approved yet (or no records at all)
+            # otherwise "succeeds" silently with a header-less, zero-row
+            # file -- error_message is nullable and only ever set on
+            # FAILED exports today, so this is safe to also use here as an
+            # informational note on an otherwise-COMPLETED export.
+            export.error_message = (
+                "No records matched the export criteria (e.g. none approved yet)."
+                if not include_unreviewed
+                else "This batch has no records yet."
+            )
         session.commit()
     except Exception as exc:
         export.status = ExportStatus.FAILED.value
@@ -143,3 +156,36 @@ def build_export_download_response(export: Export, settings: Settings) -> FileRe
         filename=_export_filename(ExportFormat(export.format)),
         headers={"X-Content-Type-Options": "nosniff"},
     )
+
+
+def delete_export_artifact(session: Session, settings: Settings, export: Export) -> None:
+    """Delete an export's stored file (if any) and its DB row.
+
+    Missing/already-gone files are tolerated -- deleting an export whose
+    file was already cleaned up (or never finished writing) must still
+    succeed and remove the DB row, not leave a dangling reference behind.
+    """
+    if export.storage_key is not None:
+        storage = get_storage_service(settings)
+        try:
+            storage.delete(export.storage_key)
+        except FileNotFoundError:
+            pass
+    delete_export_record(session, export)
+    session.commit()
+
+
+def cleanup_stale_exports(session: Session, settings: Settings, retention_days: float) -> int:
+    """Delete exports older than the retention window.
+
+    Nothing else in this codebase ever deletes an export -- every export
+    request writes a brand-new file (local disk or S3) and DB row with no
+    expiry. At 1M-record scale with routine re-exports during review, that
+    is unbounded storage growth from day one. Runs on the beat schedule
+    configured in celery_app.py.
+    """
+    cutoff = utcnow() - timedelta(days=retention_days)
+    stale = list_stale_exports(session, cutoff)
+    for export in stale:
+        delete_export_artifact(session, settings, export)
+    return len(stale)

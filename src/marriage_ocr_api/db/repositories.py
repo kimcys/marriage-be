@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import Select, func, select
@@ -181,7 +181,13 @@ def mark_pending_for_retry(session: Session, job_id: UUID) -> OCRJob:
     return job
 
 
-def fail_interrupted_jobs(session: Session, completed_at: datetime) -> int:
+def fail_interrupted_jobs(session: Session, completed_at: datetime) -> list[OCRJob]:
+    """Unconditionally fail every PROCESSING job. Only safe to call once, at
+    application startup -- at that moment nothing can legitimately still be
+    running, since the process that would be running it just (re)started.
+    Returns the affected jobs so the caller can recompute their
+    document/batch status.
+    """
     jobs = list(session.scalars(select(OCRJob).where(OCRJob.status == JobStatus.PROCESSING.value)))
     for job in jobs:
         job.status = JobStatus.FAILED.value
@@ -190,4 +196,43 @@ def fail_interrupted_jobs(session: Session, completed_at: datetime) -> int:
         job.completed_at = completed_at
         job.updated_at = completed_at
     session.flush()
-    return len(jobs)
+    return jobs
+
+
+def fail_stale_processing_jobs(session: Session, now: datetime, stale_after_seconds: float) -> list[OCRJob]:
+    """Fail PROCESSING jobs that have been running far longer than any real
+    OCR run should take, and return them so the caller can recompute their
+    document/batch status -- recompute_document_status/recompute_batch_status
+    treat any pending/processing job as blocking, so without this the
+    document/batch would stay stuck at PROCESSING forever even after the
+    job itself is marked FAILED here.
+
+    Unlike fail_interrupted_jobs, this is safe to run periodically on a live
+    system: a job that has been PROCESSING for a normal amount of time (a
+    real OCR run can legitimately take several minutes) is left alone. Only
+    jobs whose started_at is older than stale_after_seconds are treated as
+    abandoned -- the case of a worker process being OOM-killed or hard-killed
+    mid-job, which otherwise leaves the job stuck forever with no operator
+    signal.
+    """
+    cutoff = now - timedelta(seconds=stale_after_seconds)
+    jobs = list(
+        session.scalars(
+            select(OCRJob).where(
+                OCRJob.status == JobStatus.PROCESSING.value,
+                OCRJob.started_at.is_not(None),
+                OCRJob.started_at < cutoff,
+            )
+        )
+    )
+    for job in jobs:
+        job.status = JobStatus.FAILED.value
+        job.error_code = "PROCESS_STALLED"
+        job.error_message = (
+            f"OCR processing exceeded {int(stale_after_seconds)}s with no update; "
+            "the worker likely crashed or was killed mid-job."
+        )
+        job.completed_at = now
+        job.updated_at = now
+    session.flush()
+    return jobs

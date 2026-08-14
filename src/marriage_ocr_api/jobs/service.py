@@ -170,4 +170,35 @@ def list_jobs(
 
 
 def recover_interrupted_jobs(session: Session) -> int:
-    return repositories.fail_interrupted_jobs(session, _utcnow())
+    failed_jobs = repositories.fail_interrupted_jobs(session, _utcnow())
+    _recompute_status_for_jobs(session, failed_jobs)
+    return len(failed_jobs)
+
+
+def _recompute_status_for_jobs(session: Session, jobs: list[OCRJob]) -> None:
+    """Recompute each affected job's document/batch status exactly once.
+
+    recompute_document_status/recompute_batch_status treat any
+    pending/processing job as blocking, so a job that just got marked
+    FAILED by recovery (startup or periodic) must trigger a recompute --
+    otherwise its document/batch stays stuck at PROCESSING forever even
+    though the job itself is now terminal.
+    """
+    seen_document_ids: set[UUID] = set()
+    seen_batch_ids: set[UUID] = set()
+    for job in jobs:
+        if job.document_id is not None and job.document_id not in seen_document_ids:
+            seen_document_ids.add(job.document_id)
+            recompute_document_status(session, job.document_id)
+        if job.batch_id is not None and job.batch_id not in seen_batch_ids:
+            seen_batch_ids.add(job.batch_id)
+            recompute_batch_status(session, job.batch_id)
+
+
+def recover_stale_jobs(session: Session, stale_after_seconds: float) -> int:
+    """Periodic (not startup-only) recovery for jobs abandoned by a crashed
+    or killed worker mid-run. See repositories.fail_stale_processing_jobs.
+    """
+    failed_jobs = repositories.fail_stale_processing_jobs(session, _utcnow(), stale_after_seconds)
+    _recompute_status_for_jobs(session, failed_jobs)
+    return len(failed_jobs)
