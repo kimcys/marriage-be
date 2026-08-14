@@ -18,6 +18,10 @@ dependencies = [
   "alembic>=1.13,<2.0",
   "python-multipart>=0.0.9,<1.0",
   "filetype>=1.2,<2.0",
+  "openpyxl>=3.1,<4.0",
+  "boto3>=1.34,<2.0",
+  "celery[redis]>=5.4,<6.0",
+  "PyMuPDF>=1.24,<2.0",
 ]
 
 [project.optional-dependencies]
@@ -61,5 +65,5 @@ strict_equality = true
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["filetype"]
+module = ["filetype", "openpyxl", "boto3", "botocore.*", "celery"]
 ignore_missing_imports = true

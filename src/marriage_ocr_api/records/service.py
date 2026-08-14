@@ -42,8 +42,11 @@ def apply_correction(
         reviewer=reviewer,
         note=note,
     )
-    record.field_values = field_values
+    merged_field_values = {**record.field_values, **field_values}
+    record.field_values = merged_field_values
+    record.corrected_data = {**record.corrected_data, **field_values}
     record.status = RecordStatus.PENDING_REVIEW.value
+    record.review_status = RecordStatus.PENDING_REVIEW.value
     record.reviewed_by = reviewer
     record.reviewed_at = utcnow()
     record.version = next_version
@@ -77,6 +80,7 @@ def _set_review_status(
         note=note,
     )
     record.status = status.value
+    record.review_status = status.value
     record.reviewed_by = reviewer
     record.reviewed_at = utcnow()
     record.version = next_version

@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.db.models import OCRJob, utcnow
 from marriage_ocr_api.jobs.status import JobStatus
 
@@ -18,7 +19,11 @@ def create_job(
     session: Session,
     *,
     id: UUID,
+    batch_id: UUID | None = None,
+    document_id: UUID | None = None,
     status: JobStatus,
+    document_type: DocumentType = DocumentType.HANDWRITTEN_REGISTER,
+    page_number: int | None = None,
     original_filename: str,
     stored_filename: str,
     content_type: str,
@@ -39,7 +44,11 @@ def create_job(
     now = utcnow()
     job = OCRJob(
         id=id,
+        batch_id=batch_id,
+        document_id=document_id,
         status=status.value,
+        document_type=document_type.value,
+        page_number=page_number,
         original_filename=original_filename,
         stored_filename=stored_filename,
         content_type=content_type,
@@ -66,18 +75,41 @@ def get_job(session: Session, job_id: UUID) -> OCRJob | None:
     return session.get(OCRJob, job_id)
 
 
-def list_jobs(session: Session, status: JobStatus | None, limit: int, offset: int) -> list[OCRJob]:
+def list_jobs(
+    session: Session,
+    status: JobStatus | None,
+    limit: int,
+    offset: int,
+    *,
+    document_id: UUID | None = None,
+    batch_id: UUID | None = None,
+) -> list[OCRJob]:
     stmt: Select[tuple[OCRJob]] = select(OCRJob)
     if status is not None:
         stmt = stmt.where(OCRJob.status == status.value)
-    stmt = stmt.order_by(OCRJob.created_at.desc(), OCRJob.id.desc()).limit(limit).offset(offset)
+    if document_id is not None:
+        stmt = stmt.where(OCRJob.document_id == document_id)
+    if batch_id is not None:
+        stmt = stmt.where(OCRJob.batch_id == batch_id)
+    stmt = stmt.order_by(OCRJob.page_number.asc().nulls_last(), OCRJob.created_at.desc(), OCRJob.id.desc())
+    stmt = stmt.limit(limit).offset(offset)
     return list(session.scalars(stmt))
 
 
-def count_jobs(session: Session, status: JobStatus | None) -> int:
+def count_jobs(
+    session: Session,
+    status: JobStatus | None,
+    *,
+    document_id: UUID | None = None,
+    batch_id: UUID | None = None,
+) -> int:
     stmt = select(func.count()).select_from(OCRJob)
     if status is not None:
         stmt = stmt.where(OCRJob.status == status.value)
+    if document_id is not None:
+        stmt = stmt.where(OCRJob.document_id == document_id)
+    if batch_id is not None:
+        stmt = stmt.where(OCRJob.batch_id == batch_id)
     return int(session.scalar(stmt) or 0)
 
 
@@ -131,6 +163,20 @@ def mark_failed(
     job.error_message = error_message
     job.completed_at = completed_at
     job.updated_at = completed_at
+    session.flush()
+    return job
+
+
+def mark_pending_for_retry(session: Session, job_id: UUID) -> OCRJob:
+    job = _require_job(session, job_id)
+    if job.status != JobStatus.FAILED.value:
+        raise JobTransitionError(f"job {job_id} is not failed")
+    job.status = JobStatus.PENDING.value
+    job.error_code = None
+    job.error_message = None
+    job.started_at = None
+    job.completed_at = None
+    job.updated_at = utcnow()
     session.flush()
     return job
 

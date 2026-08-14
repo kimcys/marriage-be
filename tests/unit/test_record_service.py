@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from uuid import UUID
 
+import openpyxl
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.repositories import create_job
 from marriage_ocr_api.jobs.status import JobStatus
-from marriage_ocr_api.records.importer import import_records_from_json
+from marriage_ocr_api.records.importer import import_records_from_xlsx
 from marriage_ocr_api.records.repositories import create_record
 from marriage_ocr_api.records.service import (
     RecordConflictError,
@@ -62,33 +62,18 @@ def _job(session: Session) -> UUID:
     return job_id
 
 
-def test_import_records_from_json_is_idempotent(session: Session, tmp_path: Path) -> None:
+def test_import_records_from_xlsx_is_idempotent(session: Session, tmp_path: Path) -> None:
     job_id = _job(session)
-    payload = tmp_path / "ocr_records.json"
-    payload.write_text(
-        json.dumps(
-            {
-                "records": [
-                    {
-                        "source_key": "page-1-row-1",
-                        "field_values": {"full_name": "Ada Lovelace"},
-                        "confidence": 0.97,
-                        "validation_issues": [],
-                    },
-                    {
-                        "source_key": "page-1-row-2",
-                        "field_values": {"full_name": "Grace Hopper"},
-                        "confidence": 0.95,
-                        "validation_issues": [],
-                    },
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
+    payload = tmp_path / "result.xlsx"
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.append(["full_name", "Confidence", "Review Reason", "Source Page", "Source Record"])
+    worksheet.append(["Ada Lovelace", 0.97, "", 1, "record_001"])
+    worksheet.append(["Grace Hopper", 0.95, "", 1, "record_002"])
+    workbook.save(payload)
 
-    created_first = import_records_from_json(session, job_id, payload)
-    created_second = import_records_from_json(session, job_id, payload)
+    created_first = import_records_from_xlsx(session, job_id, payload)
+    created_second = import_records_from_xlsx(session, job_id, payload)
 
     assert created_first == 2
     assert created_second == 0

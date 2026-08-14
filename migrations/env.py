@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from marriage_ocr_api.batches.models import Batch, Document, Export  # noqa: F401
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.models import OCRJob  # noqa: F401
@@ -19,6 +21,9 @@ target_metadata = Base.metadata
 
 
 def get_database_url() -> str:
+    configured_env_url = os.environ.get("DATABASE_URL")
+    if configured_env_url:
+        return configured_env_url
     configured_url = config.get_main_option("sqlalchemy.url")
     if configured_url:
         return configured_url

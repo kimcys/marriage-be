@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.jobs.runner import (
     OCRRunRequest,
@@ -24,7 +25,8 @@ def _settings(tmp_path: Path, **overrides: object) -> Settings:
         "storage_root": tmp_path,
         "ocr_python_executable": Path(sys.executable),
         "ocr_module": "tests.fixtures.fake_ocr_cli",
-        "ocr_config_path": config_path,
+        "ocr_config_path_handwritten": config_path,
+        "ocr_config_path_typed": config_path,
     }
     data.update(overrides)
     return Settings(**data)
@@ -74,7 +76,59 @@ def test_runner_builds_expected_command_and_shell_false(monkeypatch: pytest.Monk
         "--debug",
         str(request.debug_path),
         "--config",
-        str(settings.ocr_config_path),
+        str(settings.ocr_config_path_handwritten),
+        "--reset-output",
+    ]
+
+
+def test_runner_uses_process_typed_command_and_config_for_typed_documents(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    typed_config_path = tmp_path / "config" / "typed_borang4b.yaml"
+    typed_config_path.parent.mkdir(parents=True, exist_ok=True)
+    typed_config_path.write_text("ok: true\n", encoding="utf-8")
+    settings = _settings(tmp_path, ocr_config_path_typed=typed_config_path)
+    request = OCRRunRequest(
+        input_path=tmp_path / "input.pdf",
+        output_path=tmp_path / "output.csv",
+        debug_path=tmp_path / "debug",
+        stdout_log_path=tmp_path / "stdout.log",
+        stderr_log_path=tmp_path / "stderr.log",
+        document_type=DocumentType.TYPED_BORANG_4B,
+    )
+    request.input_path.write_bytes(b"%PDF-1.4\n")
+
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            request.output_path.write_bytes(b"fake-csv")
+            return 0
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        return FakeProcess()
+
+    monkeypatch.setattr("marriage_ocr_api.jobs.runner.subprocess.Popen", fake_popen)
+
+    runner = SubprocessOCRRunner(settings)
+    runner.run(request)
+
+    assert captured["args"] == [
+        str(Path(sys.executable)),
+        "-m",
+        "tests.fixtures.fake_ocr_cli",
+        "process-typed",
+        "--input",
+        str(request.input_path),
+        "--output",
+        str(request.output_path),
+        "--debug",
+        str(request.debug_path),
+        "--config",
+        str(typed_config_path),
         "--reset-output",
     ]
 

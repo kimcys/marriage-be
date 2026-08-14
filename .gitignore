@@ -6,8 +6,11 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-storage/
+/storage/
 .env
 *.log
 *.sqlite3
+*.json.key
+ardent-time-*.json
+docker-compose.override.yml
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,8 @@ from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.api.errors import ApiError
+from marriage_ocr_api.batches.repositories import recompute_batch_status, recompute_document_status
+from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db import repositories
 from marriage_ocr_api.db.models import OCRJob
@@ -17,6 +20,8 @@ from marriage_ocr_api.jobs.paths import build_job_paths
 from marriage_ocr_api.jobs.schemas import JobError, JobLinks, JobResponse, PaginatedJobs
 from marriage_ocr_api.jobs.status import JobStatus
 from marriage_ocr_api.storage.local import UploadValidationError, save_upload
+
+logger = logging.getLogger(__name__)
 
 
 class JobExecutorProtocol(Protocol):
@@ -40,7 +45,11 @@ def build_job_response(job: OCRJob) -> JobResponse:
     download = f"/api/v1/jobs/{job.id}/download" if job.status == JobStatus.COMPLETED.value else None
     return JobResponse(
         id=job.id,
+        batch_id=job.batch_id,
+        document_id=job.document_id,
         status=JobStatus(job.status),
+        document_type=DocumentType(job.document_type),
+        page_number=job.page_number,
         original_filename=job.original_filename,
         content_type=job.content_type,
         file_size_bytes=job.file_size_bytes,
@@ -58,6 +67,7 @@ def create_and_submit_job(
     session: Session,
     executor: JobExecutorProtocol,
     settings: Settings,
+    document_type: DocumentType = DocumentType.HANDWRITTEN_REGISTER,
 ) -> OCRJob:
     job_id = uuid4()
     paths = build_job_paths(settings.storage_root, job_id)
@@ -67,6 +77,7 @@ def create_and_submit_job(
             session,
             id=job_id,
             status=JobStatus.PENDING,
+            document_type=document_type,
             original_filename=upload.filename or "",
             stored_filename=stored.stored_filename,
             content_type=stored.content_type,
@@ -85,7 +96,9 @@ def create_and_submit_job(
         raise ApiError(500, "INTERNAL_ERROR", "Failed to create job.") from exc
 
     try:
+        logger.info("submitting OCR job %s to background executor", job_id)
         executor.submit(job_id)
+        logger.info("submitted OCR job %s to background executor", job_id)
     except Exception as exc:
         repositories.mark_failed(
             session,
@@ -106,18 +119,53 @@ def get_job_or_raise(job_id: UUID, session: Session) -> OCRJob:
     return job
 
 
+def retry_job(job_id: UUID, session: Session, executor: JobExecutorProtocol) -> OCRJob:
+    job = get_job_or_raise(job_id, session)
+    if job.status != JobStatus.FAILED.value:
+        raise ApiError(409, "JOB_NOT_FAILED", "Only a failed job can be retried.")
+
+    job = repositories.mark_pending_for_retry(session, job_id)
+    session.commit()
+
+    try:
+        logger.info("resubmitting OCR job %s for retry", job_id)
+        executor.submit(job_id)
+    except Exception as exc:
+        completed_at = _utcnow()
+        repositories.mark_failed(
+            session,
+            job_id,
+            "INTERNAL_PROCESSING_ERROR",
+            "The OCR job could not be resubmitted for background processing.",
+            completed_at,
+        )
+        if job.document_id is not None:
+            recompute_document_status(session, job.document_id)
+        if job.batch_id is not None:
+            recompute_batch_status(session, job.batch_id)
+        session.commit()
+        raise ApiError(500, "INTERNAL_ERROR", "Failed to resubmit OCR job.") from exc
+    return job
+
+
 def list_jobs(
     session: Session,
     status: JobStatus | None,
     limit: int,
     offset: int,
+    *,
+    document_id: UUID | None = None,
+    batch_id: UUID | None = None,
 ) -> PaginatedJobs:
-    items = [build_job_response(job) for job in repositories.list_jobs(session, status, limit, offset)]
+    items = [
+        build_job_response(job)
+        for job in repositories.list_jobs(session, status, limit, offset, document_id=document_id, batch_id=batch_id)
+    ]
     return PaginatedJobs(
         items=items,
         limit=limit,
         offset=offset,
-        total=repositories.count_jobs(session, status),
+        total=repositories.count_jobs(session, status, document_id=document_id, batch_id=batch_id),
     )
 
 

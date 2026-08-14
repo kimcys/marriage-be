@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.jobs.status import JobStatus
 
 
@@ -22,7 +23,11 @@ class JobResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    batch_id: UUID | None
+    document_id: UUID | None
     status: JobStatus
+    document_type: DocumentType
+    page_number: int | None
     original_filename: str
     content_type: str
     file_size_bytes: int

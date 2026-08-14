@@ -9,9 +9,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.core.config import Settings
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+_CLI_COMMAND_BY_DOCUMENT_TYPE = {
+    DocumentType.HANDWRITTEN_REGISTER: "process",
+    DocumentType.TYPED_BORANG_4B: "process-typed",
+}
 
 
 @dataclass(frozen=True)
@@ -21,6 +27,7 @@ class OCRRunRequest:
     debug_path: Path
     stdout_log_path: Path
     stderr_log_path: Path
+    document_type: DocumentType = DocumentType.HANDWRITTEN_REGISTER
 
 
 @dataclass(frozen=True)
@@ -68,12 +75,19 @@ class SubprocessOCRRunner:
         self._popen = popen or subprocess.Popen
         self._working_directory = working_directory
 
+    def _config_path_for(self, document_type: DocumentType) -> Path:
+        if document_type == DocumentType.TYPED_BORANG_4B:
+            return self.settings.ocr_config_path_typed
+        return self.settings.ocr_config_path_handwritten
+
     def _build_command(self, request: OCRRunRequest) -> list[str]:
+        cli_command = _CLI_COMMAND_BY_DOCUMENT_TYPE[request.document_type]
+        config_path = self._config_path_for(request.document_type)
         return [
             str(self.settings.ocr_python_executable),
             "-m",
             self.settings.ocr_module,
-            "process",
+            cli_command,
             "--input",
             str(request.input_path),
             "--output",
@@ -81,7 +95,7 @@ class SubprocessOCRRunner:
             "--debug",
             str(request.debug_path),
             "--config",
-            str(self.settings.ocr_config_path),
+            str(config_path),
             "--reset-output",
         ]
 

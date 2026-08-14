@@ -53,6 +53,18 @@ class PaginatedRecordRevisions(BaseModel):
 
 
 class RecordCorrectionRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "version": 1,
+                    "field_values": {"full_name": "Ada Byron"},
+                    "note": "corrected surname",
+                }
+            ]
+        }
+    )
+
     version: int
     field_values: dict[str, object]
     note: str | None = None

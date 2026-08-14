@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
+
+import openpyxl
 
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.jobs.runner import (
@@ -21,7 +22,8 @@ def _settings(tmp_path: Path) -> Settings:
         storage_root=tmp_path,
         ocr_python_executable=Path(sys.executable),
         ocr_module="tests.fixtures.fake_ocr_cli",
-        ocr_config_path=config_path,
+        ocr_config_path_handwritten=config_path,
+        ocr_config_path_typed=config_path,
     )
 
 
@@ -52,9 +54,10 @@ def test_fake_cli_success(tmp_path: Path, monkeypatch) -> None:
     assert failure_code_for_run(result, request.output_path) is None
     assert request.output_path.is_file()
     assert request.output_path.stat().st_size > 0
-    sidecar = request.output_path.with_suffix(".json")
-    assert sidecar.is_file()
-    assert len(json.loads(sidecar.read_text(encoding="utf-8"))["records"]) == 2
+    workbook = openpyxl.load_workbook(request.output_path, read_only=True)
+    rows = list(workbook.active.iter_rows(values_only=True))
+    workbook.close()
+    assert len(rows) - 1 == 2
 
 
 def test_fake_cli_failure_sanitizes_stderr(tmp_path: Path, monkeypatch) -> None:

@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from marriage_ocr_api.api.errors import ApiError, build_error_response
-from marriage_ocr_api.api.routers import health_router, jobs_router, records_router
+from marriage_ocr_api.api.routers import batches_router, exports_router, health_router, jobs_router, records_router
 from marriage_ocr_api.core.config import Settings, get_settings
 from marriage_ocr_api.core.logging import configure_logging
 from marriage_ocr_api.core.request_id import (
@@ -19,18 +19,28 @@ from marriage_ocr_api.core.request_id import (
     request_id_context,
 )
 from marriage_ocr_api.db.session import get_session_factory
+from marriage_ocr_api.jobs.celery_executor import CeleryJobExecutor
 from marriage_ocr_api.jobs.executor import JobExecutor
 from marriage_ocr_api.jobs.runner import SubprocessOCRRunner
 from marriage_ocr_api.jobs.service import recover_interrupted_jobs
+from marriage_ocr_api.storage.factory import get_storage_service
 from marriage_ocr_api.storage.local import UploadValidationError
+from marriage_ocr_api.storage.s3 import S3StorageService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = app.state.settings
+    if settings.storage_backend == "s3":
+        storage = get_storage_service(settings)
+        if isinstance(storage, S3StorageService):
+            storage.ensure_bucket_exists()
     session_factory = get_session_factory(settings)
     app.state.session_factory = session_factory
-    app.state.executor = JobExecutor(settings, session_factory, SubprocessOCRRunner(settings))
+    if settings.job_executor_backend == "celery":
+        app.state.executor = CeleryJobExecutor()
+    else:
+        app.state.executor = JobExecutor(settings, session_factory, SubprocessOCRRunner(settings))
     with session_factory() as session:
         recover_interrupted_jobs(session)
         session.commit()
@@ -58,6 +68,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
         openapi_tags=[
+            {"name": "batches", "description": "Batch creation, document uploads, and batch listing"},
+            {"name": "exports", "description": "Batch export creation, listing, and downloads"},
             {"name": "health", "description": "Liveness and readiness endpoints"},
             {"name": "jobs", "description": "OCR job submission and retrieval"},
             {"name": "records", "description": "OCR record review and correction"},
@@ -119,6 +131,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(jobs_router)
+    app.include_router(batches_router)
+    app.include_router(exports_router)
     app.include_router(records_router)
     return app
 

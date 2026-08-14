@@ -44,7 +44,7 @@ def _conflict(message: str) -> ApiError:
     return ApiError(409, "RECORD_CONFLICT", message)
 
 
-@router.get("/api/v1/records", response_model=PaginatedRecords)
+@router.get("/api/v1/records", response_model=PaginatedRecords, operation_id="list_records")
 def list_all_records(
     status: RecordStatus | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
@@ -56,7 +56,11 @@ def list_all_records(
     return build_records_page(items, limit, offset, total)
 
 
-@router.get("/api/v1/jobs/{job_id}/records", response_model=PaginatedRecords)
+@router.get(
+    "/api/v1/jobs/{job_id}/records",
+    response_model=PaginatedRecords,
+    operation_id="list_job_records",
+)
 def list_job_records(
     job_id: UUID,
     status: RecordStatus | None = Query(default=None),
@@ -69,7 +73,7 @@ def list_job_records(
     return build_records_page(items, limit, offset, total)
 
 
-@router.get("/api/v1/records/{record_id}", response_model=RecordResponse)
+@router.get("/api/v1/records/{record_id}", response_model=RecordResponse, operation_id="get_record")
 def get_record(record_id: UUID, session: Session = Depends(get_db_session)) -> RecordResponse:
     try:
         record = get_record_or_raise(session, record_id)
@@ -78,7 +82,11 @@ def get_record(record_id: UUID, session: Session = Depends(get_db_session)) -> R
     return build_record_response(record)
 
 
-@router.get("/api/v1/records/{record_id}/revisions", response_model=PaginatedRecordRevisions)
+@router.get(
+    "/api/v1/records/{record_id}/revisions",
+    response_model=PaginatedRecordRevisions,
+    operation_id="get_record_revisions",
+)
 def get_record_revisions(
     record_id: UUID,
     limit: int = Query(default=20, ge=1, le=100),
@@ -94,7 +102,29 @@ def get_record_revisions(
     return build_revisions_page(page, limit, offset, len(revisions))
 
 
-@router.patch("/api/v1/records/{record_id}", response_model=RecordResponse)
+@router.patch(
+    "/api/v1/records/{record_id}",
+    response_model=RecordResponse,
+    operation_id="update_record",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "correction": {
+                            "summary": "Correct a record",
+                            "value": {
+                                "version": 1,
+                                "field_values": {"full_name": "Ada Byron"},
+                                "note": "corrected surname",
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    },
+)
 def patch_record(
     record_id: UUID,
     payload: RecordCorrectionRequest,
@@ -117,7 +147,11 @@ def patch_record(
     return build_record_response(record)
 
 
-@router.post("/api/v1/records/{record_id}/approve", response_model=RecordResponse)
+@router.post(
+    "/api/v1/records/{record_id}/approve",
+    response_model=RecordResponse,
+    operation_id="approve_record",
+)
 def approve_one_record(
     record_id: UUID,
     payload: RecordReviewRequest,
@@ -139,7 +173,11 @@ def approve_one_record(
     return build_record_response(record)
 
 
-@router.post("/api/v1/records/{record_id}/reject", response_model=RecordResponse)
+@router.post(
+    "/api/v1/records/{record_id}/reject",
+    response_model=RecordResponse,
+    operation_id="reject_record",
+)
 def reject_one_record(
     record_id: UUID,
     payload: RecordReviewRequest,
@@ -161,7 +199,11 @@ def reject_one_record(
     return build_record_response(record)
 
 
-@router.post("/api/v1/records/bulk-approve", response_model=BulkApproveResponse)
+@router.post(
+    "/api/v1/records/bulk-approve",
+    response_model=BulkApproveResponse,
+    operation_id="bulk_approve_records",
+)
 def bulk_approve(
     payload: BulkApproveRequest,
     session: Session = Depends(get_db_session),

@@ -27,7 +27,8 @@ def _settings(tmp_path: Path) -> Settings:
         storage_root=tmp_path,
         ocr_python_executable=Path(sys.executable),
         ocr_module="tests.fixtures.fake_ocr_cli",
-        ocr_config_path=config_path,
+        ocr_config_path_handwritten=config_path,
+        ocr_config_path_typed=config_path,
     )
 
 

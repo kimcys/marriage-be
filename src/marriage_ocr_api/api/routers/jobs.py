@@ -3,18 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.api.dependencies import get_db_session, get_job_executor, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
+from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.jobs.schemas import JobResponse, PaginatedJobs
 from marriage_ocr_api.jobs.service import (
     build_job_response,
     create_and_submit_job,
     get_job_or_raise,
+    retry_job,
     sanitize_stem,
 )
 from marriage_ocr_api.jobs.service import (
@@ -33,36 +35,49 @@ def _resolve_storage_path(storage_root: Path, relative_path: str) -> Path:
     return resolved
 
 
-@router.post("", response_model=JobResponse, status_code=202)
+@router.post("", response_model=JobResponse, status_code=202, operation_id="create_job_upload")
 def create_job(
     request: Request,
     response: Response,
     file: UploadFile = File(...),
+    document_type: DocumentType = Form(DocumentType.HANDWRITTEN_REGISTER),
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(settings_dependency),
 ) -> JobResponse:
-    job = create_and_submit_job(file, session, get_job_executor(request), settings)
+    job = create_and_submit_job(file, session, get_job_executor(request), settings, document_type=document_type)
     job_response = build_job_response(job)
     response.headers["Location"] = job_response.links.self
     return job_response
 
 
-@router.get("", response_model=PaginatedJobs)
+@router.get("", response_model=PaginatedJobs, operation_id="list_jobs")
 def list_jobs(
     status: JobStatus | None = Query(default=None),
+    document_id: UUID | None = Query(default=None),
+    batch_id: UUID | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> PaginatedJobs:
-    return list_jobs_service(session, status, limit, offset)
+    return list_jobs_service(session, status, limit, offset, document_id=document_id, batch_id=batch_id)
 
 
-@router.get("/{job_id}", response_model=JobResponse)
+@router.get("/{job_id}", response_model=JobResponse, operation_id="get_job")
 def get_job(job_id: UUID, session: Session = Depends(get_db_session)) -> JobResponse:
     return build_job_response(get_job_or_raise(job_id, session))
 
 
-@router.get("/{job_id}/download")
+@router.post("/{job_id}/retry", response_model=JobResponse, operation_id="retry_job")
+def retry_one_job(
+    request: Request,
+    job_id: UUID,
+    session: Session = Depends(get_db_session),
+) -> JobResponse:
+    job = retry_job(job_id, session, get_job_executor(request))
+    return build_job_response(job)
+
+
+@router.get("/{job_id}/download", operation_id="download_job")
 def download_job(
     job_id: UUID,
     session: Session = Depends(get_db_session),

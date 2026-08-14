@@ -33,11 +33,14 @@ def test_ready_route_returns_200_when_all_checks_pass(tmp_path: Path) -> None:
     config_path = tmp_path / "config" / "production.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text("ok: true\n", encoding="utf-8")
+    typed_config_path = tmp_path / "config" / "typed_borang4b.yaml"
+    typed_config_path.write_text("ok: true\n", encoding="utf-8")
     storage_root = tmp_path / "storage"
     storage_root.mkdir(parents=True, exist_ok=True)
     settings = Settings(
         storage_root=storage_root,
-        ocr_config_path=config_path,
+        ocr_config_path_handwritten=config_path,
+        ocr_config_path_typed=typed_config_path,
         ocr_python_executable=Path(sys.executable),
     )
     session = _session()
@@ -62,7 +65,8 @@ def test_ready_route_returns_503_when_config_is_missing(tmp_path: Path) -> None:
     storage_root.mkdir(parents=True, exist_ok=True)
     settings = Settings(
         storage_root=storage_root,
-        ocr_config_path=tmp_path / "missing" / "production.yaml",
+        ocr_config_path_handwritten=tmp_path / "missing" / "production.yaml",
+        ocr_config_path_typed=tmp_path / "missing" / "typed_borang4b.yaml",
         ocr_python_executable=Path(sys.executable),
     )
     session = _session()

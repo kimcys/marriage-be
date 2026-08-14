@@ -57,7 +57,7 @@ def ready(
     except Exception:
         pass
 
-    if settings.ocr_config_path.is_file():
+    if settings.ocr_config_path_handwritten.is_file() and settings.ocr_config_path_typed.is_file():
         checks["ocr_config"] = "ok"
 
     if settings.ocr_python_executable.is_file() and os.access(settings.ocr_python_executable, os.X_OK):

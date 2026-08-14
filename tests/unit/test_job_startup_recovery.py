@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
+import openpyxl
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -106,11 +107,10 @@ def test_executor_processes_job_with_fresh_session(tmp_path: Path) -> None:
     class FakeRunner:
         def run(self, request: OCRRunRequest) -> OCRRunResult:
             request.output_path.parent.mkdir(parents=True, exist_ok=True)
-            request.output_path.write_bytes(b"fake-xlsx")
-            request.output_path.with_suffix(".json").write_text(
-                Path("tests/fixtures/ocr_records.json").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
+            workbook = openpyxl.Workbook()
+            workbook.active.append(["full_name", "Confidence"])
+            workbook.active.append(["Ada Lovelace", 0.97])
+            workbook.save(request.output_path)
             return OCRRunResult(return_code=0, timed_out=False, duration_seconds=0.01)
 
     from marriage_ocr_api.jobs.executor import JobExecutor

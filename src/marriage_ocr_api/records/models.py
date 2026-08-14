@@ -16,7 +16,15 @@ def utcnow() -> datetime:
 
 class OCRRecord(Base):
     __tablename__ = "ocr_records"
-    __table_args__ = (UniqueConstraint("job_id", "source_key", name="uq_ocr_records_job_source_key"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id",
+            "source_key",
+            "source_page",
+            "source_record_index",
+            name="uq_ocr_records_job_source_key",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     job_id: Mapped[UUID] = mapped_column(
@@ -24,7 +32,21 @@ class OCRRecord(Base):
         index=True,
         nullable=False,
     )
+    batch_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("batches.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    document_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("documents.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
     source_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_record_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(
         String(32),
         index=True,
@@ -32,8 +54,11 @@ class OCRRecord(Base):
         default=RecordStatus.PENDING_REVIEW.value,
     )
     field_values: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    normalized_data: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    corrected_data: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     confidence: Mapped[float | None] = mapped_column(nullable=True)
     validation_issues: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    review_status: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="PENDING")
     reviewed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -67,3 +92,6 @@ class RecordRevision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     record: Mapped[OCRRecord] = relationship(back_populates="revisions")
+
+
+from marriage_ocr_api.batches.models import Batch, Document, Export  # noqa: F401,E402

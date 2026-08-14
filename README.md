@@ -126,26 +126,40 @@ storage/jobs/<job-id>/
     └── stderr.log
 ```
 
+Optional export storage can also use an S3-compatible backend. The local adapter remains the default, but the repository now includes an S3-compatible storage service and an optional MinIO profile in Docker Compose for testing that path.
+
 ## Testing
 
+Fast unit and contract checks:
+
 ```bash
+python scripts/export_openapi.py
 ruff format --check .
 ruff check .
 mypy src
-pytest -q
 alembic upgrade head
 alembic downgrade base
+pytest -q -m "not integration"
+```
+
+Integration and Docker checks:
+
+```bash
+pytest -q -m integration -k 'not docker_only_end_to_end_smoke'
+pytest -q -m integration tests/integration/test_docker_e2e.py
 docker compose config
 docker compose build api
 docker compose up -d postgres
 docker compose run --rm api alembic upgrade head
-docker compose run --rm api pytest -q
+docker compose run --rm api pytest -q -m "not integration"
 docker compose down -v
 ```
 
 The repository also includes mocked tests and health checks so CI and local development do not require real Google credentials.
 
 The Docker build and Compose defaults pin the upstream OCR checkout to `ad8235c5186c100dea723f7d6a011150dfd18dad`, which matches the current `origin/main` of `marriage-ocr`.
+
+Frontend contract notes live in [`docs/frontend-integration.md`](docs/frontend-integration.md).
 
 ## Troubleshooting
 
