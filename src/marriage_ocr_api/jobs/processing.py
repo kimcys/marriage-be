@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
@@ -18,12 +19,25 @@ from marriage_ocr_api.jobs.runner import (
     read_sanitized_stderr,
 )
 from marriage_ocr_api.records.importer import import_records_from_csv, import_records_from_xlsx
+from marriage_ocr_api.storage.factory import get_storage_service
 
 logger = logging.getLogger(__name__)
 
 
 class SessionFactory(Protocol):
     def __call__(self) -> Session: ...
+
+
+def _ensure_input_materialized(settings: Settings, input_path: Path, input_relative_path: str) -> None:
+    """Pull the job's input file down from S3/Spaces if it isn't already on
+    this machine's local disk. Needed once the API/OneDrive-fetch task and
+    the Celery worker that actually runs OCR can be on different Droplets --
+    a worker's local disk otherwise has no way to see a file another node
+    wrote. A no-op for STORAGE_BACKEND=local (single-filesystem deployments)
+    and for a worker that happens to already have the file locally."""
+    if settings.storage_backend != "s3" or input_path.exists():
+        return
+    get_storage_service(settings).materialize(input_relative_path, input_path)
 
 
 def _mark_failed_safe(
@@ -84,6 +98,7 @@ def process_ocr_job(
         stderr_log_path = storage_root / job.stderr_log_relative_path
         output_extension = ".csv" if is_typed else ".xlsx"
         output_path = debug_path.parent / "output" / f"result{output_extension}"
+        _ensure_input_materialized(settings, input_path, job.input_relative_path)
         request = OCRRunRequest(
             input_path=input_path,
             output_path=output_path,
@@ -97,6 +112,11 @@ def process_ocr_job(
         if failure_code is None:
             completed_at = datetime.now(UTC)
             output_relative_path = output_path.relative_to(storage_root).as_posix()
+            if settings.storage_backend == "s3":
+                # Push the result up so any API instance can serve
+                # /jobs/{id}/download -- the worker that produced it may not
+                # be the same node as the one handling that request.
+                get_storage_service(settings).put_file(output_path, output_relative_path)
             with session_factory() as session:
                 repositories.mark_completed(
                     session,

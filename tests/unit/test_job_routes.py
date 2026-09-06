@@ -178,6 +178,47 @@ def test_completed_job_download_returns_xlsx_headers(
     assert response.headers["content-disposition"].endswith('register-result.xlsx"')
 
 
+def test_completed_job_download_redirects_to_signed_url_when_storage_is_s3(
+    client: TestClient,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = UUID("123e4567-e89b-12d3-a456-426614174203")
+    create_job(
+        session,
+        id=job_id,
+        status=JobStatus.COMPLETED,
+        original_filename="register.pdf",
+        stored_filename="source.pdf",
+        content_type="application/pdf",
+        file_size_bytes=1,
+        input_relative_path=f"jobs/{job_id}/input/source.pdf",
+        output_relative_path=f"jobs/{job_id}/output/result.xlsx",
+        debug_relative_path=f"jobs/{job_id}/debug",
+        stdout_log_relative_path=f"jobs/{job_id}/logs/stdout.log",
+        stderr_log_relative_path=f"jobs/{job_id}/logs/stderr.log",
+        ocr_git_ref="abc123",
+    )
+    session.commit()
+
+    signed_url = "https://example-space.nyc3.digitaloceanspaces.com/signed-download"
+
+    class FakeStorageService:
+        def signed_download_url(self, key: str, expires_seconds: int) -> str:
+            assert key == f"jobs/{job_id}/output/result.xlsx"
+            return signed_url
+
+    monkeypatch.setattr("marriage_ocr_api.jobs.service.get_storage_service", lambda settings: FakeStorageService())
+    # Only the response-building path matters here (does it redirect instead
+    # of assuming local disk); the app's actual storage_backend setting is
+    # irrelevant once get_storage_service itself is faked out.
+
+    response = client.get(f"/api/v1/jobs/{job_id}/download", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == signed_url
+
+
 def test_completed_job_missing_output_returns_410(client: TestClient, session: Session) -> None:
     job_id = UUID("123e4567-e89b-12d3-a456-426614174202")
     create_job(

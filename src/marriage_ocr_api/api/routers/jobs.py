@@ -1,31 +1,21 @@
 from __future__ import annotations
 
-from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.api.dependencies import get_db_session, get_job_executor, settings_dependency
-from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.jobs.schemas import JobResponse, PaginatedJobs
-from marriage_ocr_api.jobs.service import build_job_response, get_job_or_raise, retry_job, sanitize_stem
+from marriage_ocr_api.jobs.service import build_job_download_response, build_job_response, get_job_or_raise, retry_job
 from marriage_ocr_api.jobs.service import (
     list_jobs as list_jobs_service,
 )
 from marriage_ocr_api.jobs.status import JobStatus
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
-
-
-def _resolve_storage_path(storage_root: Path, relative_path: str) -> Path:
-    resolved_root = storage_root.resolve()
-    resolved = (resolved_root / relative_path).resolve()
-    if not resolved.is_relative_to(resolved_root):
-        raise ApiError(500, "INTERNAL_ERROR", "Invalid stored path.")
-    return resolved
 
 
 @router.get("", response_model=PaginatedJobs, operation_id="list_jobs")
@@ -55,24 +45,11 @@ def retry_one_job(
     return build_job_response(job)
 
 
-@router.get("/{job_id}/download", operation_id="download_job")
+@router.get("/{job_id}/download", response_model=None, operation_id="download_job")
 def download_job(
     job_id: UUID,
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(settings_dependency),
-) -> FileResponse:
+) -> FileResponse | RedirectResponse:
     job = get_job_or_raise(job_id, session)
-    if job.status != JobStatus.COMPLETED.value:
-        raise ApiError(409, "JOB_NOT_COMPLETED", "The OCR job has not completed yet.")
-    if not job.output_relative_path:
-        raise ApiError(410, "OUTPUT_FILE_MISSING", "The expected output file is missing.")
-    output_path = _resolve_storage_path(settings.storage_root, job.output_relative_path)
-    if not output_path.exists() or not output_path.is_file() or output_path.stat().st_size == 0:
-        raise ApiError(410, "OUTPUT_FILE_MISSING", "The expected output file is missing.")
-    filename = f"{sanitize_stem(job.original_filename)}-result.xlsx"
-    return FileResponse(
-        path=output_path,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=filename,
-        headers={"X-Content-Type-Options": "nosniff"},
-    )
+    return build_job_download_response(job, settings)
