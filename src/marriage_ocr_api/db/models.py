@@ -56,3 +56,4 @@ class OCRJob(Base):
 
 
 from marriage_ocr_api.batches.models import Batch, Document, Export  # noqa: F401,E402
+from marriage_ocr_api.onedrive.models import OneDriveSubmission  # noqa: F401,E402

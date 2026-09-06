@@ -51,6 +51,12 @@ class Document(Base):
         String(32), nullable=False, default=DocumentType.HANDWRITTEN_REGISTER.value
     )
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    onedrive_submission_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("onedrive_submissions.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False

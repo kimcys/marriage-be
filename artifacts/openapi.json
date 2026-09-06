@@ -307,7 +307,15 @@
       "DocumentType": {
         "enum": [
           "HANDWRITTEN_REGISTER",
-          "TYPED_BORANG_4B"
+          "HANDWRITTEN_CERAI_LEGACY",
+          "HANDWRITTEN_CERAI_MODERN",
+          "HANDWRITTEN_RUJUK_LEGACY",
+          "HANDWRITTEN_RUJUK_MODERN",
+          "TYPED_BORANG_4B",
+          "TYPED_CERAI_LEGACY",
+          "TYPED_CERAI_MODERN",
+          "TYPED_RUJUK_LEGACY",
+          "TYPED_RUJUK_MODERN"
         ],
         "title": "DocumentType",
         "type": "string"
@@ -661,6 +669,131 @@
           "FAILED"
         ],
         "title": "JobStatus",
+        "type": "string"
+      },
+      "OneDriveLinkCreateRequest": {
+        "examples": [
+          {
+            "url": "https://1drv.ms/f/s!AbCdEfGhIjKlMnOp"
+          }
+        ],
+        "properties": {
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "OneDriveLinkCreateRequest",
+        "type": "object"
+      },
+      "OneDriveSubmissionError": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "OneDriveSubmissionError",
+        "type": "object"
+      },
+      "OneDriveSubmissionResponse": {
+        "properties": {
+          "batch_id": {
+            "format": "uuid",
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OneDriveSubmissionError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fetched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "skipped_files": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SkippedFile"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped Files"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OneDriveSubmissionStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "batch_id",
+          "url",
+          "status",
+          "skipped_files",
+          "created_at",
+          "updated_at",
+          "fetched_at"
+        ],
+        "title": "OneDriveSubmissionResponse",
+        "type": "object"
+      },
+      "OneDriveSubmissionStatus": {
+        "enum": [
+          "PENDING",
+          "FETCHING",
+          "FETCHED",
+          "FAILED"
+        ],
+        "title": "OneDriveSubmissionStatus",
         "type": "string"
       },
       "PaginatedBatches": {
@@ -1099,6 +1232,24 @@
         "title": "RecordStatus",
         "type": "string"
       },
+      "SkippedFile": {
+        "properties": {
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "status"
+        ],
+        "title": "SkippedFile",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -1345,6 +1496,67 @@
         "summary": "Upload Document",
         "tags": [
           "batches"
+        ]
+      }
+    },
+    "/api/v1/batches/{batch_id}/onedrive-links": {
+      "post": {
+        "operationId": "submit_onedrive_link",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "link": {
+                  "summary": "Submit a OneDrive share link",
+                  "value": {
+                    "url": "https://1drv.ms/f/s!AbCdEfGhIjKlMnOp"
+                  }
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/OneDriveLinkCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OneDriveSubmissionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Onedrive Link",
+        "tags": [
+          "onedrive"
         ]
       }
     },
@@ -2372,6 +2584,10 @@
     {
       "description": "OCR job submission and retrieval",
       "name": "jobs"
+    },
+    {
+      "description": "OneDrive share-link submission and auto-classification",
+      "name": "onedrive"
     },
     {
       "description": "OCR record review and correction",

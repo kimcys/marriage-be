@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from marriage_ocr_api.core.config import Settings, get_settings
 from marriage_ocr_api.db.session import iter_session
 from marriage_ocr_api.jobs.service import JobExecutorProtocol
+from marriage_ocr_api.onedrive.service import OneDriveExecutorProtocol
 
 
 def settings_dependency(request: Request) -> Settings:
@@ -33,3 +34,7 @@ def get_db_session(request: Request) -> Iterator[Session]:
 
 def get_job_executor(request: Request) -> JobExecutorProtocol:
     return cast(JobExecutorProtocol, request.app.state.executor)
+
+
+def get_onedrive_executor(request: Request) -> OneDriveExecutorProtocol:
+    return cast(OneDriveExecutorProtocol, request.app.state.onedrive_executor)

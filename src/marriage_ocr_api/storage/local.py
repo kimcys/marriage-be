@@ -90,7 +90,7 @@ class LocalStorageService(StorageService):
         return None
 
 
-def _detect_content_type(sample: bytes, extension: str) -> str:
+def detect_content_type(sample: bytes, extension: str) -> str:
     expected = ALLOWED_EXTENSIONS_TO_CONTENT_TYPES[extension]
     if extension == ".pdf":
         if sample.startswith(b"%PDF-"):
@@ -163,7 +163,7 @@ def save_upload(upload: UploadFile, paths: JobPaths, settings: Settings) -> Stor
             raise UploadValidationError(400, "EMPTY_FILE", "The uploaded file is empty.")
 
         sample = temp_path.read_bytes()[:4096]
-        detected_content_type = _detect_content_type(sample, extension)
+        detected_content_type = detect_content_type(sample, extension)
         temp_path.replace(final_path)
         return StoredUpload(
             stored_filename=final_path.name,

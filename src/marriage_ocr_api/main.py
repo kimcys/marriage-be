@@ -10,7 +10,14 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from marriage_ocr_api.api.errors import ApiError, build_error_response
-from marriage_ocr_api.api.routers import batches_router, exports_router, health_router, jobs_router, records_router
+from marriage_ocr_api.api.routers import (
+    batches_router,
+    exports_router,
+    health_router,
+    jobs_router,
+    onedrive_router,
+    records_router,
+)
 from marriage_ocr_api.core.config import Settings, get_settings
 from marriage_ocr_api.core.logging import configure_logging
 from marriage_ocr_api.core.request_id import (
@@ -23,6 +30,8 @@ from marriage_ocr_api.jobs.celery_executor import CeleryJobExecutor
 from marriage_ocr_api.jobs.executor import JobExecutor
 from marriage_ocr_api.jobs.runner import SubprocessOCRRunner
 from marriage_ocr_api.jobs.service import recover_interrupted_jobs
+from marriage_ocr_api.onedrive.celery_executor import CeleryOneDriveExecutor
+from marriage_ocr_api.onedrive.executor import OneDriveExecutor
 from marriage_ocr_api.storage.factory import get_storage_service
 from marriage_ocr_api.storage.local import UploadValidationError
 from marriage_ocr_api.storage.s3 import S3StorageService
@@ -39,13 +48,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_factory = session_factory
     if settings.job_executor_backend == "celery":
         app.state.executor = CeleryJobExecutor()
+        app.state.onedrive_executor = CeleryOneDriveExecutor()
     else:
         app.state.executor = JobExecutor(settings, session_factory, SubprocessOCRRunner(settings))
+        app.state.onedrive_executor = OneDriveExecutor(settings, session_factory, app.state.executor)
     with session_factory() as session:
         recover_interrupted_jobs(session)
         session.commit()
     yield
     app.state.executor.shutdown()
+    app.state.onedrive_executor.shutdown()
 
 
 def _error_response(
@@ -72,6 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {"name": "exports", "description": "Batch export creation, listing, and downloads"},
             {"name": "health", "description": "Liveness and readiness endpoints"},
             {"name": "jobs", "description": "OCR job submission and retrieval"},
+            {"name": "onedrive", "description": "OneDrive share-link submission and auto-classification"},
             {"name": "records", "description": "OCR record review and correction"},
         ],
     )
@@ -85,6 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.executor = None
+    app.state.onedrive_executor = None
 
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
@@ -133,6 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(batches_router)
     app.include_router(exports_router)
+    app.include_router(onedrive_router)
     app.include_router(records_router)
     return app
 

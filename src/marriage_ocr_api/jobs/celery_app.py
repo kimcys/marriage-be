@@ -41,5 +41,6 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-from marriage_ocr_api.jobs import tasks  # noqa: E402,F401  (registers @celery_app.task defs)
 from marriage_ocr_api.exports import tasks as export_tasks  # noqa: E402,F401
+from marriage_ocr_api.jobs import tasks  # noqa: E402,F401  (registers @celery_app.task defs)
+from marriage_ocr_api.onedrive import tasks as onedrive_tasks  # noqa: E402,F401
