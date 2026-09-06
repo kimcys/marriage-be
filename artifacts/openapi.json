@@ -130,42 +130,6 @@
         "title": "BatchStatus",
         "type": "string"
       },
-      "Body_create_job_upload": {
-        "properties": {
-          "document_type": {
-            "$ref": "#/components/schemas/DocumentType",
-            "default": "HANDWRITTEN_REGISTER"
-          },
-          "file": {
-            "contentMediaType": "application/octet-stream",
-            "title": "File",
-            "type": "string"
-          }
-        },
-        "required": [
-          "file"
-        ],
-        "title": "Body_create_job_upload",
-        "type": "object"
-      },
-      "Body_upload_batch_document": {
-        "properties": {
-          "document_type": {
-            "$ref": "#/components/schemas/DocumentType",
-            "default": "HANDWRITTEN_REGISTER"
-          },
-          "file": {
-            "contentMediaType": "application/octet-stream",
-            "title": "File",
-            "type": "string"
-          }
-        },
-        "required": [
-          "file"
-        ],
-        "title": "Body_upload_batch_document",
-        "type": "object"
-      },
       "BulkApproveRequest": {
         "properties": {
           "record_ids": {
@@ -209,100 +173,6 @@
         ],
         "title": "BulkApproveResponse",
         "type": "object"
-      },
-      "DocumentResponse": {
-        "properties": {
-          "batch_id": {
-            "format": "uuid",
-            "title": "Batch Id",
-            "type": "string"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "document_type": {
-            "$ref": "#/components/schemas/DocumentType"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "media_type": {
-            "title": "Media Type",
-            "type": "string"
-          },
-          "original_filename": {
-            "title": "Original Filename",
-            "type": "string"
-          },
-          "page_count": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Page Count"
-          },
-          "safe_filename": {
-            "title": "Safe Filename",
-            "type": "string"
-          },
-          "sha256": {
-            "title": "Sha256",
-            "type": "string"
-          },
-          "size_bytes": {
-            "title": "Size Bytes",
-            "type": "integer"
-          },
-          "status": {
-            "$ref": "#/components/schemas/DocumentStatus"
-          },
-          "storage_key": {
-            "title": "Storage Key",
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "batch_id",
-          "original_filename",
-          "safe_filename",
-          "media_type",
-          "size_bytes",
-          "sha256",
-          "storage_key",
-          "status",
-          "document_type",
-          "page_count",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "DocumentResponse",
-        "type": "object"
-      },
-      "DocumentStatus": {
-        "enum": [
-          "UPLOADED",
-          "QUEUED",
-          "PROCESSING",
-          "PROCESSED",
-          "FAILED",
-          "CANCELLED"
-        ],
-        "title": "DocumentStatus",
-        "type": "string"
       },
       "DocumentType": {
         "enum": [
@@ -1037,6 +907,18 @@
       },
       "RecordResponse": {
         "properties": {
+          "batch_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          },
           "confidence": {
             "anyOf": [
               {
@@ -1052,6 +934,18 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
           },
           "field_values": {
             "additionalProperties": true,
@@ -1118,6 +1012,8 @@
         "required": [
           "id",
           "job_id",
+          "batch_id",
+          "document_id",
           "source_key",
           "status",
           "field_values",
@@ -1441,59 +1337,6 @@
           }
         },
         "summary": "Get One Batch",
-        "tags": [
-          "batches"
-        ]
-      }
-    },
-    "/api/v1/batches/{batch_id}/documents": {
-      "post": {
-        "operationId": "upload_batch_document",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "batch_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Batch Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_upload_batch_document"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DocumentResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Upload Document",
         "tags": [
           "batches"
         ]
@@ -1887,45 +1730,6 @@
         "tags": [
           "jobs"
         ]
-      },
-      "post": {
-        "operationId": "create_job_upload",
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_create_job_upload"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Create Job",
-        "tags": [
-          "jobs"
-        ]
       }
     },
     "/api/v1/jobs/{job_id}": {
@@ -2040,6 +1844,24 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "description": "Free-text search over the record's extracted field values",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Free-text search over the record's extracted field values",
+              "title": "Q"
             }
           },
           {
@@ -2169,6 +1991,42 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "description": "Free-text search over the record's extracted field values",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Free-text search over the record's extracted field values",
+              "title": "Q"
+            }
+          },
+          {
+            "description": "Filter to records from this OneDrive share link",
+            "in": "query",
+            "name": "source_url",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to records from this OneDrive share link",
+              "title": "Source Url"
             }
           },
           {
@@ -2570,7 +2428,7 @@
   },
   "tags": [
     {
-      "description": "Batch creation, document uploads, and batch listing",
+      "description": "Batch creation and listing",
       "name": "batches"
     },
     {
@@ -2582,7 +2440,7 @@
       "name": "health"
     },
     {
-      "description": "OCR job submission and retrieval",
+      "description": "OCR job status, retrieval, and download",
       "name": "jobs"
     },
     {

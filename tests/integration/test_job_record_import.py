@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,8 +14,11 @@ from sqlalchemy.pool import StaticPool
 from marriage_ocr_api.api.dependencies import get_db_session
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
+from marriage_ocr_api.db.repositories import create_job
 from marriage_ocr_api.jobs.executor import JobExecutor
+from marriage_ocr_api.jobs.paths import build_job_paths
 from marriage_ocr_api.jobs.runner import SubprocessOCRRunner
+from marriage_ocr_api.jobs.status import JobStatus
 from marriage_ocr_api.main import create_app
 
 
@@ -67,12 +70,31 @@ def test_completed_job_imports_records(tmp_path: Path, monkeypatch: pytest.Monke
 
     client = TestClient(app)
     try:
-        response = client.post(
-            "/api/v1/jobs",
-            files={"file": ("register.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", "application/pdf")},
-        )
-        assert response.status_code == 202
-        job_id = UUID(response.json()["id"])
+        # Standalone job (no batch/document), seeded directly rather than
+        # through an upload endpoint -- this test is about the real
+        # executor completing a job and importing its records, not about
+        # how the job's input file arrived on disk.
+        job_id = uuid4()
+        paths = build_job_paths(settings.storage_root, job_id)
+        paths.input_dir.mkdir(parents=True, exist_ok=True)
+        paths.input_source_path.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n")
+        with session_factory() as session:
+            create_job(
+                session,
+                id=job_id,
+                status=JobStatus.PENDING,
+                original_filename="register.pdf",
+                stored_filename=paths.input_source_path.name,
+                content_type="application/pdf",
+                file_size_bytes=paths.input_source_path.stat().st_size,
+                input_relative_path=paths.input_relative_path,
+                debug_relative_path=paths.debug_relative_path,
+                stdout_log_relative_path=paths.stdout_log_relative_path,
+                stderr_log_relative_path=paths.stderr_log_relative_path,
+                ocr_git_ref="test",
+            )
+            session.commit()
+        app.state.executor.submit(job_id)
 
         _wait_for_completed_job(client, job_id)
 

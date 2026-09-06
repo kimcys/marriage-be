@@ -8,9 +8,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from marriage_ocr_api.batches.repositories import create_batch, create_document
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.repositories import create_job
 from marriage_ocr_api.jobs.status import JobStatus
+from marriage_ocr_api.onedrive.repositories import create_submission
 from marriage_ocr_api.records.repositories import (
     append_revision,
     count_records,
@@ -93,6 +95,115 @@ def test_create_get_and_list_records(session: Session) -> None:
     records = list_records(session, job_id=job_id, batch_id=None, status=None, limit=20, offset=0)
     assert [record.id for record in records] == [newer.id, older.id]
     assert count_records(session, job_id=job_id, batch_id=None, status=None) == 2
+
+
+def test_list_records_filters_by_free_text_query(session: Session) -> None:
+    job_id = _job(session)
+    lovelace = create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-1",
+        field_values={"full_name": "Ada Lovelace", "ic_number": "800101-01-1234"},
+        confidence=0.97,
+        validation_issues=[],
+    )
+    create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-2",
+        field_values={"full_name": "Grace Hopper", "ic_number": "900202-02-5678"},
+        confidence=0.95,
+        validation_issues=[],
+    )
+    session.commit()
+
+    by_name = list_records(session, job_id=job_id, batch_id=None, status=None, q="lovelace", limit=20, offset=0)
+    assert [record.id for record in by_name] == [lovelace.id]
+    assert count_records(session, job_id=job_id, batch_id=None, status=None, q="lovelace") == 1
+
+    by_ic = list_records(session, job_id=job_id, batch_id=None, status=None, q="800101", limit=20, offset=0)
+    assert [record.id for record in by_ic] == [lovelace.id]
+
+    no_match = list_records(session, job_id=job_id, batch_id=None, status=None, q="nobody", limit=20, offset=0)
+    assert no_match == []
+
+
+def test_list_records_filters_by_onedrive_source_url(session: Session) -> None:
+    job_id = _job(session)
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!from-link")
+    linked_document = create_document(
+        session,
+        batch_id=batch.id,
+        original_filename="linked.pdf",
+        safe_filename="linked.pdf",
+        media_type="application/pdf",
+        size_bytes=1,
+        sha256="0" * 64,
+        storage_key="batches/1/documents/1/input/linked.pdf",
+    )
+    linked_document.onedrive_submission_id = submission.id
+    unlinked_document = create_document(
+        session,
+        batch_id=batch.id,
+        original_filename="uploaded.pdf",
+        safe_filename="uploaded.pdf",
+        media_type="application/pdf",
+        size_bytes=1,
+        sha256="1" * 64,
+        storage_key="batches/1/documents/2/input/uploaded.pdf",
+    )
+    session.commit()
+
+    from_link = create_record(
+        session,
+        job_id=job_id,
+        batch_id=batch.id,
+        document_id=linked_document.id,
+        source_key="page-1-row-1",
+        field_values={"full_name": "Ada Lovelace"},
+        confidence=0.97,
+        validation_issues=[],
+    )
+    create_record(
+        session,
+        job_id=job_id,
+        batch_id=batch.id,
+        document_id=unlinked_document.id,
+        source_key="page-1-row-2",
+        field_values={"full_name": "Grace Hopper"},
+        confidence=0.95,
+        validation_issues=[],
+    )
+    session.commit()
+
+    matched = list_records(
+        session,
+        job_id=None,
+        batch_id=None,
+        status=None,
+        source_url="https://1drv.ms/f/s!from-link",
+        limit=20,
+        offset=0,
+    )
+    assert [record.id for record in matched] == [from_link.id]
+    assert (
+        count_records(
+            session, job_id=None, batch_id=None, status=None, source_url="https://1drv.ms/f/s!from-link"
+        )
+        == 1
+    )
+
+    no_match = list_records(
+        session,
+        job_id=None,
+        batch_id=None,
+        status=None,
+        source_url="https://1drv.ms/f/s!does-not-exist",
+        limit=20,
+        offset=0,
+    )
+    assert no_match == []
 
 
 def test_append_revision_tracks_history(session: Session) -> None:

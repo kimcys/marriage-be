@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import shutil
 from dataclasses import dataclass
 from io import BufferedReader
@@ -8,10 +7,7 @@ from pathlib import Path
 from typing import cast
 
 import filetype
-from fastapi import UploadFile
 
-from marriage_ocr_api.core.config import Settings
-from marriage_ocr_api.jobs.paths import JobPaths
 from marriage_ocr_api.storage.base import StorageService, StoredObject
 
 
@@ -39,10 +35,6 @@ ALLOWED_EXTENSIONS_TO_CONTENT_TYPES = {
     ".tif": "image/tiff",
     ".tiff": "image/tiff",
 }
-
-
-def _cleanup_job_dir(job_root: Path) -> None:
-    shutil.rmtree(job_root, ignore_errors=True)
 
 
 def _resolve_storage_path(root: Path, key: str) -> Path:
@@ -118,63 +110,3 @@ def detect_content_type(sample: bytes, extension: str) -> str:
             "The uploaded file signature does not match the file extension.",
         )
     return cast(str, guessed.mime)
-
-
-def save_upload(upload: UploadFile, paths: JobPaths, settings: Settings) -> StoredUpload:
-    filename = upload.filename or ""
-    if not filename.strip():
-        raise UploadValidationError(400, "INVALID_UPLOAD", "A file name is required.")
-
-    extension = Path(filename).suffix.lower()
-    if extension not in ALLOWED_EXTENSIONS_TO_CONTENT_TYPES:
-        raise UploadValidationError(
-            415,
-            "UNSUPPORTED_FILE_TYPE",
-            "Only PDF, JPEG, PNG, and TIFF files are supported.",
-        )
-
-    paths.input_dir.mkdir(parents=True, exist_ok=True)
-    paths.output_dir.mkdir(parents=True, exist_ok=True)
-    paths.debug_dir.mkdir(parents=True, exist_ok=True)
-    paths.logs_dir.mkdir(parents=True, exist_ok=True)
-
-    effective_paths = paths.with_extension(extension)
-    bytes_written = 0
-    digest = hashlib.sha256()
-    temp_path = effective_paths.input_part_path
-    final_path = effective_paths.input_source_path
-    try:
-        with temp_path.open("wb") as destination:
-            while True:
-                chunk = upload.file.read(settings.upload_chunk_bytes)
-                if not chunk:
-                    break
-                bytes_written += len(chunk)
-                if bytes_written > settings.max_upload_bytes:
-                    raise UploadValidationError(
-                        413,
-                        "UPLOAD_TOO_LARGE",
-                        "The uploaded file exceeds the maximum allowed size.",
-                    )
-                digest.update(chunk)
-                destination.write(chunk)
-
-        if bytes_written == 0:
-            raise UploadValidationError(400, "EMPTY_FILE", "The uploaded file is empty.")
-
-        sample = temp_path.read_bytes()[:4096]
-        detected_content_type = detect_content_type(sample, extension)
-        temp_path.replace(final_path)
-        return StoredUpload(
-            stored_filename=final_path.name,
-            content_type=detected_content_type,
-            file_size_bytes=bytes_written,
-            input_relative_path=effective_paths.input_relative_path,
-            sha256=digest.hexdigest(),
-        )
-    except UploadValidationError:
-        _cleanup_job_dir(paths.job_root)
-        raise
-    except Exception:
-        _cleanup_job_dir(paths.job_root)
-        raise

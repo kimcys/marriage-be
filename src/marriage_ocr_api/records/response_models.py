@@ -26,6 +26,8 @@ class RecordResponse(BaseModel):
 
     id: UUID
     job_id: UUID
+    batch_id: UUID | None
+    document_id: UUID | None
     source_key: str
     status: RecordStatus
     field_values: dict[str, object]

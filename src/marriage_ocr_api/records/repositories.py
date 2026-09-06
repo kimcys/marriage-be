@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, String, func, select
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from marriage_ocr_api.batches.models import Document
+from marriage_ocr_api.onedrive.models import OneDriveSubmission
 from marriage_ocr_api.records.models import OCRRecord, RecordRevision
 from marriage_ocr_api.records.status import RecordStatus
 
@@ -162,22 +165,55 @@ def get_record_or_raise(session: Session, record_id: UUID) -> OCRRecord:
     return record
 
 
-def list_records(
-    session: Session,
+def _apply_record_filters[T: Select[Any]](
+    stmt: T,
     *,
     job_id: UUID | None,
     batch_id: UUID | None,
     status: RecordStatus | None,
-    limit: int,
-    offset: int,
-) -> list[OCRRecord]:
-    stmt: Select[tuple[OCRRecord]] = select(OCRRecord)
+    q: str | None,
+    source_url: str | None,
+) -> T:
     if job_id is not None:
         stmt = stmt.where(OCRRecord.job_id == job_id)
     if batch_id is not None:
         stmt = stmt.where(OCRRecord.batch_id == batch_id)
     if status is not None:
         stmt = stmt.where(OCRRecord.status == status.value)
+    if q:
+        # Free-text search over the extracted field values (e.g. full_name,
+        # ic_number) without needing to know which field to match on --
+        # different record types (nikah/cerai/rujuk) have different field
+        # schemas, so a per-field filter can't cover all of them uniformly.
+        # ilike() compiles to a portable case-insensitive match on both
+        # Postgres and SQLite (used in tests).
+        stmt = stmt.where(sql_cast(OCRRecord.field_values, String).ilike(f"%{q}%"))
+    if source_url:
+        # A record's source_url is resolved through the document it came
+        # from, which is only set for documents ingested via a OneDrive
+        # link -- a directly-uploaded document has no onedrive_submission_id
+        # and so never matches this filter.
+        stmt = (
+            stmt.join(Document, OCRRecord.document_id == Document.id)
+            .join(OneDriveSubmission, Document.onedrive_submission_id == OneDriveSubmission.id)
+            .where(OneDriveSubmission.url == source_url)
+        )
+    return stmt
+
+
+def list_records(
+    session: Session,
+    *,
+    job_id: UUID | None,
+    batch_id: UUID | None,
+    status: RecordStatus | None,
+    q: str | None = None,
+    source_url: str | None = None,
+    limit: int,
+    offset: int,
+) -> list[OCRRecord]:
+    stmt: Select[tuple[OCRRecord]] = select(OCRRecord)
+    stmt = _apply_record_filters(stmt, job_id=job_id, batch_id=batch_id, status=status, q=q, source_url=source_url)
     stmt = stmt.order_by(OCRRecord.created_at.desc(), OCRRecord.id.desc()).limit(limit).offset(offset)
     return list(session.scalars(stmt))
 
@@ -188,14 +224,11 @@ def count_records(
     job_id: UUID | None,
     batch_id: UUID | None,
     status: RecordStatus | None,
+    q: str | None = None,
+    source_url: str | None = None,
 ) -> int:
     stmt = select(func.count()).select_from(OCRRecord)
-    if job_id is not None:
-        stmt = stmt.where(OCRRecord.job_id == job_id)
-    if batch_id is not None:
-        stmt = stmt.where(OCRRecord.batch_id == batch_id)
-    if status is not None:
-        stmt = stmt.where(OCRRecord.status == status.value)
+    stmt = _apply_record_filters(stmt, job_id=job_id, batch_id=batch_id, status=status, q=q, source_url=source_url)
     return int(session.scalar(stmt) or 0)
 
 

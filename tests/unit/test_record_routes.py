@@ -11,11 +11,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from marriage_ocr_api.api.dependencies import get_db_session
+from marriage_ocr_api.batches.repositories import create_batch, create_document
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.repositories import create_job
 from marriage_ocr_api.jobs.status import JobStatus
 from marriage_ocr_api.main import create_app
+from marriage_ocr_api.onedrive.repositories import create_submission
 from marriage_ocr_api.records.repositories import create_record
 
 
@@ -151,6 +153,73 @@ def test_record_routes_support_review_workflow(client: TestClient, session: Sess
     bulk_response = client.post("/api/v1/records/bulk-approve", json={"record_ids": [str(third_id)]})
     assert bulk_response.status_code == 200
     assert bulk_response.json()["items"][0]["status"] == "APPROVED"
+
+
+def test_list_records_supports_free_text_search(client: TestClient, session: Session) -> None:
+    _, second_id, _ = _seed_records(session)
+
+    response = client.get("/api/v1/records", params={"q": "hopper"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["id"] == str(second_id)
+
+
+def test_list_records_supports_filtering_by_onedrive_source_url(client: TestClient, session: Session) -> None:
+    first_id, _, _ = _seed_records(session)
+
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!from-link")
+    document = create_document(
+        session,
+        batch_id=batch.id,
+        original_filename="linked.pdf",
+        safe_filename="linked.pdf",
+        media_type="application/pdf",
+        size_bytes=1,
+        sha256="0" * 64,
+        storage_key="batches/1/documents/1/input/linked.pdf",
+    )
+    document.onedrive_submission_id = submission.id
+    session.commit()
+
+    job_id = UUID("123e4567-e89b-12d3-a456-426614175600")
+    create_job(
+        session,
+        id=job_id,
+        batch_id=batch.id,
+        document_id=document.id,
+        status=JobStatus.COMPLETED,
+        original_filename="linked.pdf",
+        stored_filename="source.pdf",
+        content_type="application/pdf",
+        file_size_bytes=1,
+        input_relative_path="jobs/456/input/source.pdf",
+        debug_relative_path="jobs/456/debug",
+        stdout_log_relative_path="jobs/456/logs/stdout.log",
+        stderr_log_relative_path="jobs/456/logs/stderr.log",
+        ocr_git_ref="abc123",
+    )
+    linked_record = create_record(
+        session,
+        job_id=job_id,
+        batch_id=batch.id,
+        document_id=document.id,
+        source_key="page-1-row-1",
+        field_values={"full_name": "Rosalind Franklin"},
+        confidence=0.9,
+        validation_issues=[],
+    )
+    session.commit()
+
+    response = client.get("/api/v1/records", params={"source_url": "https://1drv.ms/f/s!from-link"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["id"] == str(linked_record.id)
+    assert first_id not in [UUID(item["id"]) for item in payload["items"]]
 
 
 def test_record_routes_return_conflicts_as_api_errors(client: TestClient, session: Session) -> None:

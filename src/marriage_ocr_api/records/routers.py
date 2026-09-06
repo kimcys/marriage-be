@@ -48,12 +48,16 @@ def _conflict(message: str) -> ApiError:
 def list_all_records(
     batch_id: UUID | None = Query(default=None),
     status: RecordStatus | None = Query(default=None),
+    q: str | None = Query(default=None, description="Free-text search over the record's extracted field values"),
+    source_url: str | None = Query(default=None, description="Filter to records from this OneDrive share link"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> PaginatedRecords:
-    items = list_records(session, job_id=None, batch_id=batch_id, status=status, limit=limit, offset=offset)
-    total = count_records(session, job_id=None, batch_id=batch_id, status=status)
+    items = list_records(
+        session, job_id=None, batch_id=batch_id, status=status, q=q, source_url=source_url, limit=limit, offset=offset
+    )
+    total = count_records(session, job_id=None, batch_id=batch_id, status=status, q=q, source_url=source_url)
     return build_records_page(items, limit, offset, total)
 
 
@@ -65,12 +69,13 @@ def list_all_records(
 def list_job_records(
     job_id: UUID,
     status: RecordStatus | None = Query(default=None),
+    q: str | None = Query(default=None, description="Free-text search over the record's extracted field values"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> PaginatedRecords:
-    items = list_records(session, job_id=job_id, batch_id=None, status=status, limit=limit, offset=offset)
-    total = count_records(session, job_id=job_id, batch_id=None, status=status)
+    items = list_records(session, job_id=job_id, batch_id=None, status=status, q=q, limit=limit, offset=offset)
+    total = count_records(session, job_id=job_id, batch_id=None, status=status, q=q)
     return build_records_page(items, limit, offset, total)
 
 

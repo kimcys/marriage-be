@@ -15,9 +15,11 @@ from marriage_ocr_api.storage.local import (
 
 
 def save_local_file(source_path: Path, paths: JobPaths, settings: Settings) -> StoredUpload:
-    """Same validation/storage-layout contract as storage.local.save_upload,
-    for a file that's already fully downloaded to local disk (a OneDrive
-    fetch result) rather than arriving as a streamed FastAPI UploadFile."""
+    """Validate and move a file that's already fully downloaded to local disk
+    (a OneDrive fetch result) into a Document's storage layout -- same
+    extension/signature/size checks and StoredUpload result shape a direct
+    file upload would get, just reading from a Path instead of a streamed
+    FastAPI UploadFile."""
     extension = source_path.suffix.lower()
     if extension not in ALLOWED_EXTENSIONS_TO_CONTENT_TYPES:
         raise UploadValidationError(

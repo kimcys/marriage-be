@@ -33,7 +33,6 @@ from marriage_ocr_api.jobs.service import recover_interrupted_jobs
 from marriage_ocr_api.onedrive.celery_executor import CeleryOneDriveExecutor
 from marriage_ocr_api.onedrive.executor import OneDriveExecutor
 from marriage_ocr_api.storage.factory import get_storage_service
-from marriage_ocr_api.storage.local import UploadValidationError
 from marriage_ocr_api.storage.s3 import S3StorageService
 
 
@@ -80,10 +79,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
         openapi_tags=[
-            {"name": "batches", "description": "Batch creation, document uploads, and batch listing"},
+            {"name": "batches", "description": "Batch creation and listing"},
             {"name": "exports", "description": "Batch export creation, listing, and downloads"},
             {"name": "health", "description": "Liveness and readiness endpoints"},
-            {"name": "jobs", "description": "OCR job submission and retrieval"},
+            {"name": "jobs", "description": "OCR job status, retrieval, and download"},
             {"name": "onedrive", "description": "OneDrive share-link submission and auto-classification"},
             {"name": "records", "description": "OCR record review and correction"},
         ],
@@ -102,11 +101,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
-        request_id = normalize_request_id(request.headers.get("X-Request-ID"))
-        return _error_response(exc.status_code, exc.code, exc.message, request_id)
-
-    @app.exception_handler(UploadValidationError)
-    async def handle_upload_validation_error(request: Request, exc: UploadValidationError) -> JSONResponse:
         request_id = normalize_request_id(request.headers.get("X-Request-ID"))
         return _error_response(exc.status_code, exc.code, exc.message, request_id)
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from io import BytesIO
 from pathlib import Path
 from uuid import UUID
 
@@ -65,28 +64,6 @@ def client(engine, tmp_path: Path) -> TestClient:
     app.state.executor = FakeExecutor()
     app.dependency_overrides[get_db_session] = override_session
     return TestClient(app)
-
-
-def test_upload_returns_202_and_location(client: TestClient) -> None:
-    response = client.post(
-        "/api/v1/jobs",
-        files={"file": ("register.pdf", BytesIO(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n"), "application/pdf")},
-    )
-
-    assert response.status_code == 202
-    assert UUID(response.json()["id"])
-    assert response.headers["Location"] == f"/api/v1/jobs/{response.json()['id']}"
-    assert response.json()["status"] == "PENDING"
-
-
-def test_invalid_upload_returns_standard_error_body(client: TestClient) -> None:
-    response = client.post("/api/v1/jobs", files={"file": ("notes.txt", b"hello", "text/plain")})
-
-    assert response.status_code == 415
-    body = response.json()["error"]
-    assert body["code"] == "UNSUPPORTED_FILE_TYPE"
-    assert body["message"]
-    assert body["request_id"]
 
 
 def test_list_pagination_and_status_filter(client: TestClient, session: Session) -> None:

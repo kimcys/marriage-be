@@ -3,22 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.api.dependencies import get_db_session, get_job_executor, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.jobs.schemas import JobResponse, PaginatedJobs
-from marriage_ocr_api.jobs.service import (
-    build_job_response,
-    create_and_submit_job,
-    get_job_or_raise,
-    retry_job,
-    sanitize_stem,
-)
+from marriage_ocr_api.jobs.service import build_job_response, get_job_or_raise, retry_job, sanitize_stem
 from marriage_ocr_api.jobs.service import (
     list_jobs as list_jobs_service,
 )
@@ -33,21 +26,6 @@ def _resolve_storage_path(storage_root: Path, relative_path: str) -> Path:
     if not resolved.is_relative_to(resolved_root):
         raise ApiError(500, "INTERNAL_ERROR", "Invalid stored path.")
     return resolved
-
-
-@router.post("", response_model=JobResponse, status_code=202, operation_id="create_job_upload")
-def create_job(
-    request: Request,
-    response: Response,
-    file: UploadFile = File(...),
-    document_type: DocumentType = Form(DocumentType.HANDWRITTEN_REGISTER),
-    session: Session = Depends(get_db_session),
-    settings: Settings = Depends(settings_dependency),
-) -> JobResponse:
-    job = create_and_submit_job(file, session, get_job_executor(request), settings, document_type=document_type)
-    job_response = build_job_response(job)
-    response.headers["Location"] = job_response.links.self
-    return job_response
 
 
 @router.get("", response_model=PaginatedJobs, operation_id="list_jobs")

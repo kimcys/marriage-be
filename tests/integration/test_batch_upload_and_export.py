@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import boto3
 import pytest
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from marriage_ocr_api.api.dependencies import get_db_session
+from marriage_ocr_api.batches.repositories import create_document
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.main import create_app
@@ -28,6 +29,21 @@ class FakeExecutor:
 
     def shutdown(self) -> None:
         pass
+
+
+def _seed_document(session: Session, batch_id: UUID) -> None:
+    create_document(
+        session,
+        id=uuid4(),
+        batch_id=batch_id,
+        original_filename="register.pdf",
+        safe_filename="source.pdf",
+        media_type="application/pdf",
+        size_bytes=27,
+        sha256="0" * 64,
+        storage_key=f"batches/{batch_id}/documents/{uuid4()}/input/source.pdf",
+    )
+    session.commit()
 
 
 @pytest.fixture
@@ -69,21 +85,16 @@ def client(engine, tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
-def test_create_batch_upload_document_create_export_and_download(client: TestClient) -> None:
+def test_create_batch_with_document_create_export_and_download(client: TestClient, session: Session) -> None:
     batch_response = client.post("/api/v1/batches", json={"name": "Batch 1"})
     assert batch_response.status_code == 201
+    batch_id = UUID(batch_response.json()["id"])
 
-    batch_id = batch_response.json()["id"]
-
-    upload_response = client.post(
-        f"/api/v1/batches/{batch_id}/documents",
-        files={"file": ("register.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", "application/pdf")},
-    )
-    assert upload_response.status_code == 202
+    _seed_document(session, batch_id)
 
     export_response = client.post(
         "/api/v1/exports",
-        json={"batch_id": batch_id, "format": "XLSX", "include_unreviewed": False},
+        json={"batch_id": str(batch_id), "format": "XLSX", "include_unreviewed": False},
     )
     assert export_response.status_code == 202
     export_id = export_response.json()["id"]
@@ -133,17 +144,14 @@ def test_export_download_round_trips_through_real_minio(engine, tmp_path: Path) 
 
     batch_response = client.post("/api/v1/batches", json={"name": "S3 batch"})
     assert batch_response.status_code == 201
-    batch_id = batch_response.json()["id"]
+    batch_id = UUID(batch_response.json()["id"])
 
-    upload_response = client.post(
-        f"/api/v1/batches/{batch_id}/documents",
-        files={"file": ("register.pdf", b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", "application/pdf")},
-    )
-    assert upload_response.status_code == 202
+    with session_factory() as session:
+        _seed_document(session, batch_id)
 
     export_response = client.post(
         "/api/v1/exports",
-        json={"batch_id": batch_id, "format": "XLSX", "include_unreviewed": False},
+        json={"batch_id": str(batch_id), "format": "XLSX", "include_unreviewed": False},
     )
     assert export_response.status_code == 202
     export_id = export_response.json()["id"]

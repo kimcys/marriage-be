@@ -7,7 +7,9 @@ def test_openapi_has_stable_operation_ids_and_examples() -> None:
     spec = app.openapi()
 
     assert spec["paths"]["/api/v1/batches"]["post"]["operationId"] == "create_batch"
-    assert spec["paths"]["/api/v1/batches/{batch_id}/documents"]["post"]["operationId"] == "upload_batch_document"
+    assert (
+        spec["paths"]["/api/v1/batches/{batch_id}/onedrive-links"]["post"]["operationId"] == "submit_onedrive_link"
+    )
     assert spec["paths"]["/api/v1/exports"]["post"]["operationId"] == "create_export"
     assert spec["paths"]["/api/v1/records/{record_id}"]["patch"]["operationId"] == "update_record"
 
