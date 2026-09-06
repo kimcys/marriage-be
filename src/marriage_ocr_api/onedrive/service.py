@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from marriage_ocr_api.batches.repositories import create_document, recompute_bat
 from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db import repositories as job_repositories
+from marriage_ocr_api.jobs.runner import sanitize_stderr_text
 from marriage_ocr_api.jobs.service import JobExecutorProtocol
 from marriage_ocr_api.jobs.status import JobStatus
 from marriage_ocr_api.onedrive import repositories
@@ -28,6 +30,36 @@ from marriage_ocr_api.storage.factory import get_storage_service
 from marriage_ocr_api.storage.local import UploadValidationError
 
 logger = logging.getLogger(__name__)
+
+# Matches OneDriveSubmission.error_message's column width (String(1000)).
+# fetch_public's stderr can be an entire Rich-rendered traceback panel from
+# marriage-ocr's CLI (thousands of characters) -- writing that in raw
+# exceeds the column and makes the UPDATE itself fail, which previously left
+# the submission stuck at FETCHING forever with no operator-visible error at
+# all (mark_failed's own commit failing, swallowed by
+# _mark_submission_failed_safe's except-and-log).
+_ERROR_MESSAGE_LIMIT = 1000
+
+# Rich (marriage-ocr CLI's uncaught-exception renderer) always closes its
+# boxed traceback panel with a border line like this before printing a
+# plain, undecorated "ExceptionType: message" summary after it -- which the
+# console may itself wrap across several physical lines if it's long.
+_BOX_BOTTOM_BORDER_RE = re.compile(r"^[╰└][─\s]*[╯┘]?\s*$")
+
+
+def _summarize_error_text(raw: str, limit: int) -> str:
+    """Pulls out Rich's plain summary after the boxed panel (rejoining any
+    lines the console wrapped it across) instead of storing -- and
+    truncating -- the whole panel, which would otherwise save box-drawing
+    art cut off mid-character as the visible error message."""
+    cleaned = sanitize_stderr_text(raw, limit * 4)
+    lines = cleaned.splitlines()
+    border_indexes = [i for i, line in enumerate(lines) if _BOX_BOTTOM_BORDER_RE.match(line.strip())]
+    tail_lines = lines[border_indexes[-1] + 1 :] if border_indexes else lines
+    summary = " ".join(line.strip() for line in tail_lines if line.strip())
+    if summary:
+        return summary[:limit]
+    return cleaned[-limit:]
 
 
 class OneDriveExecutorProtocol(Protocol):
@@ -223,7 +255,7 @@ def run_onedrive_fetch(
         try:
             runner.fetch_public(url, dest_dir)
         except OneDriveFetchError as exc:
-            message = exc.stderr.strip() or str(exc)
+            message = _summarize_error_text(exc.stderr.strip() or str(exc), _ERROR_MESSAGE_LIMIT)
             _mark_submission_failed_safe(session_factory, submission_id, "ONEDRIVE_FETCH_FAILED", message)
             logger.info("onedrive fetch failed for submission %s: %s", submission_id, message)
             return

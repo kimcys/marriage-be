@@ -157,3 +157,56 @@ def test_run_onedrive_fetch_marks_submission_failed_when_fetch_itself_fails(tmp_
     assert updated.error_code == "ONEDRIVE_FETCH_FAILED"
     assert "sign-in" in (updated.error_message or "")
     check_session.close()
+
+
+def test_run_onedrive_fetch_summarizes_a_long_rich_traceback_stderr(tmp_path: Path) -> None:
+    """error_message is a String(1000) column. marriage-ocr's CLI renders an
+    uncaught failure as a full Rich traceback panel on stderr -- thousands of
+    characters of box-drawing art and ANSI escapes -- which SQLite (used by
+    this test) won't reject but a real Postgres column would, failing the
+    UPDATE and leaving the submission stuck at FETCHING with no visible
+    error at all. Rich always follows the panel with one plain "ExceptionType:
+    message" line; that's what should end up stored, not the panel."""
+
+    # Rich wraps a long summary line across the console width, so the real
+    # final "ExceptionType: message" text can itself span several physical
+    # lines -- not just one -- after the panel's bottom border.
+    box_traceback = (
+        "\x1b[31m╭──────── Traceback ────────╮\x1b[0m\n"
+        + ("\x1b[31m│\x1b[0m " + ("x" * 200) + "\n") * 20
+        + "\x1b[31m╰───────────────────────────╯\x1b[0m\n"
+        "RuntimeError: OneDrive rendered a page that isn't a recognizable\n"
+        "file or folder listing.\n"
+    )
+
+    class LongTracebackFetchRunner:
+        def fetch_public(self, url: str, dest: Path) -> None:
+            raise OneDriveFetchError("onedrive fetch-public exited with code 1", stderr=box_traceback)
+
+        def classify(self, file_path: Path) -> Classification:
+            raise AssertionError("classify should never be called when fetch itself fails")
+
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!long-error")
+    session.commit()
+    session.close()
+
+    run_onedrive_fetch(
+        submission.id,
+        Settings(storage_root=tmp_path),
+        session_factory,
+        FakeJobExecutor(),
+        LongTracebackFetchRunner(),
+    )
+
+    check_session = session_factory()
+    updated = get_submission(check_session, submission.id)
+    assert updated.status == OneDriveSubmissionStatus.FAILED.value
+    assert len(box_traceback) > 1000, "the fixture must actually exceed the column width to test truncation"
+    assert updated.error_message == (
+        "RuntimeError: OneDrive rendered a page that isn't a recognizable file or folder listing."
+    )
+    check_session.close()
