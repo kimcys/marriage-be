@@ -14,5 +14,6 @@ build/
 *.sqlite3
 *.json.key
 ardent-time-*.json
+marrige-ocr-*.json
 docker-compose.override.yml
 
