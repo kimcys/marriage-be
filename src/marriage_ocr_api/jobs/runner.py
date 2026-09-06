@@ -16,7 +16,32 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 _CLI_COMMAND_BY_DOCUMENT_TYPE = {
     DocumentType.HANDWRITTEN_REGISTER: "process",
+    DocumentType.HANDWRITTEN_CERAI_LEGACY: "process",
+    DocumentType.HANDWRITTEN_CERAI_MODERN: "process",
+    DocumentType.HANDWRITTEN_RUJUK_LEGACY: "process",
+    DocumentType.HANDWRITTEN_RUJUK_MODERN: "process",
     DocumentType.TYPED_BORANG_4B: "process-typed",
+    DocumentType.TYPED_CERAI_LEGACY: "process-typed",
+    DocumentType.TYPED_CERAI_MODERN: "process-typed",
+    DocumentType.TYPED_RUJUK_LEGACY: "process-typed",
+    DocumentType.TYPED_RUJUK_MODERN: "process-typed",
+}
+
+# Mirrors marriage-ocr's own batch_runner.ROUTING_TABLE filenames, resolved
+# against Settings.ocr_config_dir. HANDWRITTEN_REGISTER/TYPED_BORANG_4B are
+# deliberately absent here -- they keep using the two dedicated
+# Settings.ocr_config_path_* fields below, unchanged from before this table
+# existed, so nothing that already depends on those two fields' exact values
+# changes behavior.
+_CONFIG_FILENAME_BY_DOCUMENT_TYPE = {
+    DocumentType.HANDWRITTEN_CERAI_LEGACY: "handwritten_cerai_legacy.yaml",
+    DocumentType.HANDWRITTEN_CERAI_MODERN: "handwritten_cerai_modern.yaml",
+    DocumentType.HANDWRITTEN_RUJUK_LEGACY: "handwritten_rujuk_legacy.yaml",
+    DocumentType.HANDWRITTEN_RUJUK_MODERN: "handwritten_rujuk_modern.yaml",
+    DocumentType.TYPED_CERAI_LEGACY: "typed_cerai_legacy.yaml",
+    DocumentType.TYPED_CERAI_MODERN: "typed_cerai_modern.yaml",
+    DocumentType.TYPED_RUJUK_LEGACY: "typed_rujuk_legacy.yaml",
+    DocumentType.TYPED_RUJUK_MODERN: "typed_rujuk_modern.yaml",
 }
 
 
@@ -76,6 +101,9 @@ class SubprocessOCRRunner:
         self._working_directory = working_directory
 
     def _config_path_for(self, document_type: DocumentType) -> Path:
+        filename = _CONFIG_FILENAME_BY_DOCUMENT_TYPE.get(document_type)
+        if filename is not None:
+            return self.settings.ocr_config_dir / filename
         if document_type == DocumentType.TYPED_BORANG_4B:
             return self.settings.ocr_config_path_typed
         return self.settings.ocr_config_path_handwritten

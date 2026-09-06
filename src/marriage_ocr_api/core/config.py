@@ -51,13 +51,24 @@ class Settings(BaseSettings):
     upload_chunk_bytes: int = 1048576
     ocr_python_executable: Path = Path("/usr/local/bin/python")
     ocr_module: str = "marriage_ocr.cli"
-    ocr_config_path_handwritten: Path = Path("/opt/marriage-ocr/config/production.yaml")
+    # Was production.yaml -- that config never got the pipeline.engine:
+    # gemini_page conversion (only the 5 handwritten*.yaml configs did), so
+    # staying on it would silently keep the old Vision-based pipeline even
+    # after bumping marriage_ocr_git_ref below. handwritten.yaml is Nikah
+    # specifically; ocr_config_dir (below) is what resolves the other 4
+    # handwritten record-type/layout combinations, see jobs/runner.py.
+    ocr_config_path_handwritten: Path = Path("/opt/marriage-ocr/config/handwritten.yaml")
     ocr_config_path_typed: Path = Path("/opt/marriage-ocr/config/typed_borang4b.yaml")
+    # Root all non-default DocumentType values' config files are resolved
+    # against (jobs/runner.py's _CONFIG_FILENAME_BY_DOCUMENT_TYPE) -- mirrors
+    # marriage-ocr's own batch_runner.ROUTING_TABLE, which is keyed by
+    # filenames relative to this same directory.
+    ocr_config_dir: Path = Path("/opt/marriage-ocr/config")
     ocr_timeout_seconds: int = 3600
     ocr_max_concurrent_jobs: int = 1
     ocr_stderr_api_limit: int = 1000
     marriage_ocr_git_url: str = "https://github.com/kimcys/marriage-ocr.git"
-    marriage_ocr_git_ref: str = "06902e69447dae6bd47f8829842e9e68d1e96296"
+    marriage_ocr_git_ref: str = "21d284b0aeb54267de03ede4727205e6d0a4c1f6"
     google_application_credentials: str = "/run/secrets/google-vision.json"
     gemini_api_key: str = ""
     storage_backend: str = "local"

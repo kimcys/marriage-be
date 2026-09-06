@@ -6,12 +6,12 @@ x-ocr-common-env: &ocr-common-env
   STORAGE_ROOT: /app/storage
   OCR_PYTHON_EXECUTABLE: /opt/venv/bin/python
   OCR_MODULE: ${OCR_MODULE:-marriage_ocr.cli}
-  OCR_CONFIG_PATH_HANDWRITTEN: /opt/marriage-ocr/config/production.yaml
+  OCR_CONFIG_PATH_HANDWRITTEN: /opt/marriage-ocr/config/handwritten.yaml
   OCR_CONFIG_PATH_TYPED: /opt/marriage-ocr/config/typed_borang4b.yaml
   OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-3600}
   OCR_STDERR_API_LIMIT: ${OCR_STDERR_API_LIMIT:-1000}
   MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
-  MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-ad8235c5186c100dea723f7d6a011150dfd18dad}
+  MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-21d284b0aeb54267de03ede4727205e6d0a4c1f6}
   GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-vision.json
   GEMINI_API_KEY: ${GEMINI_API_KEY:-}
   STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
@@ -67,7 +67,7 @@ services:
       context: .
       args:
         MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
-        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-ad8235c5186c100dea723f7d6a011150dfd18dad}
+        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-21d284b0aeb54267de03ede4727205e6d0a4c1f6}
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,7 +96,7 @@ services:
       context: .
       args:
         MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
-        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-ad8235c5186c100dea723f7d6a011150dfd18dad}
+        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-21d284b0aeb54267de03ede4727205e6d0a4c1f6}
     depends_on:
       postgres:
         condition: service_healthy
@@ -117,7 +117,7 @@ services:
       context: .
       args:
         MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
-        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-ad8235c5186c100dea723f7d6a011150dfd18dad}
+        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-21d284b0aeb54267de03ede4727205e6d0a4c1f6}
     depends_on:
       postgres:
         condition: service_healthy

@@ -133,6 +133,74 @@ def test_runner_uses_process_typed_command_and_config_for_typed_documents(
     ]
 
 
+@pytest.mark.parametrize(
+    ("document_type", "expected_cli_command", "expected_config_filename"),
+    [
+        (DocumentType.HANDWRITTEN_CERAI_LEGACY, "process", "handwritten_cerai_legacy.yaml"),
+        (DocumentType.HANDWRITTEN_CERAI_MODERN, "process", "handwritten_cerai_modern.yaml"),
+        (DocumentType.HANDWRITTEN_RUJUK_LEGACY, "process", "handwritten_rujuk_legacy.yaml"),
+        (DocumentType.HANDWRITTEN_RUJUK_MODERN, "process", "handwritten_rujuk_modern.yaml"),
+        (DocumentType.TYPED_CERAI_LEGACY, "process-typed", "typed_cerai_legacy.yaml"),
+        (DocumentType.TYPED_CERAI_MODERN, "process-typed", "typed_cerai_modern.yaml"),
+        (DocumentType.TYPED_RUJUK_LEGACY, "process-typed", "typed_rujuk_legacy.yaml"),
+        (DocumentType.TYPED_RUJUK_MODERN, "process-typed", "typed_rujuk_modern.yaml"),
+    ],
+)
+def test_runner_routes_cerai_and_rujuk_document_types_via_ocr_config_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    document_type: DocumentType,
+    expected_cli_command: str,
+    expected_config_filename: str,
+) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    settings = _settings(tmp_path, ocr_config_dir=config_dir)
+    request = OCRRunRequest(
+        input_path=tmp_path / "input.pdf",
+        output_path=tmp_path / "output.xlsx",
+        debug_path=tmp_path / "debug",
+        stdout_log_path=tmp_path / "stdout.log",
+        stderr_log_path=tmp_path / "stderr.log",
+        document_type=document_type,
+    )
+    request.input_path.write_bytes(b"%PDF-1.4\n")
+
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            request.output_path.write_bytes(b"fake-xlsx")
+            return 0
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        return FakeProcess()
+
+    monkeypatch.setattr("marriage_ocr_api.jobs.runner.subprocess.Popen", fake_popen)
+
+    runner = SubprocessOCRRunner(settings)
+    runner.run(request)
+
+    assert captured["args"] == [
+        str(Path(sys.executable)),
+        "-m",
+        "tests.fixtures.fake_ocr_cli",
+        expected_cli_command,
+        "--input",
+        str(request.input_path),
+        "--output",
+        str(request.output_path),
+        "--debug",
+        str(request.debug_path),
+        "--config",
+        str(config_dir / expected_config_filename),
+        "--reset-output",
+    ]
+
+
 def test_runner_reports_missing_output(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     request = OCRRunRequest(
