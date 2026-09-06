@@ -1,11 +1,12 @@
 FROM python:3.12-slim AS builder
 
 ARG MARRIAGE_OCR_GIT_URL=https://github.com/kimcys/marriage-ocr.git
-ARG MARRIAGE_OCR_GIT_REF=21d284b0aeb54267de03ede4727205e6d0a4c1f6
+ARG MARRIAGE_OCR_GIT_REF=0c63526a981d06445e471f2632f5181ee5d4d7fd
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
@@ -28,11 +29,19 @@ RUN pip install --upgrade pip \
     && pip install /opt/marriage-ocr \
     && pip install ".[dev]"
 
+# Browser binary only here (no --with-deps): this stage is discarded, and
+# the runtime OS libraries it would apt-get install don't survive into the
+# final image's COPY --from=builder anyway. install-deps runs for real in
+# the final stage below, after /opt/venv (and the playwright package with
+# it) is copied over.
+RUN python -m playwright install chromium
+
 FROM python:3.12-slim AS final
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/opt/venv/bin:$PATH \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
     APP_HOST=0.0.0.0 \
     APP_PORT=8000
 
@@ -45,8 +54,15 @@ WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /opt/marriage-ocr /opt/marriage-ocr
+COPY --from=builder /opt/pw-browsers /opt/pw-browsers
 COPY --from=builder /build /app
 COPY tests /app/tests
+
+# Only the OS-level shared libraries headless Chromium needs, matched to
+# the browser binary already unpacked at /opt/pw-browsers above -- the
+# binary itself isn't re-downloaded here.
+RUN python -m playwright install-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /app/storage \
     && ln -sf /opt/venv/bin/alembic /usr/local/bin/alembic \
@@ -54,7 +70,7 @@ RUN mkdir -p /app/storage \
     && ln -sf /opt/venv/bin/pytest /usr/local/bin/pytest \
     && ln -sf /opt/venv/bin/ruff /usr/local/bin/ruff \
     && ln -sf /opt/venv/bin/uvicorn /usr/local/bin/uvicorn \
-    && chown -R app:app /app /opt/venv /opt/marriage-ocr
+    && chown -R app:app /app /opt/venv /opt/marriage-ocr /opt/pw-browsers
 
 USER app
 
