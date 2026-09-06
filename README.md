@@ -11,14 +11,25 @@ OCR processing stays in the separate `marriage-ocr` repository and is executed a
 python -m marriage_ocr.cli process --input ... --output ... --debug ... --config ... --reset-output
 ```
 
-The API accepts one uploaded file, stores it locally under a generated job directory, creates a job row in PostgreSQL, returns `202 Accepted`, and lets clients poll for completion.
+Documents are ingested via a OneDrive share link (`POST /api/v1/batches/{batch_id}/onedrive-links`):
+a background task fetches the link, classifies every file it finds (mixed Nikah/Cerai/Rujuk,
+handwritten/typed content in one link is expected, not an edge case), and routes each routable
+file to its own job. A repeat POST of a URL already submitted returns that submission's existing
+state unchanged rather than re-fetching.
 
-## Phase 1 Limitation
+## Job Execution
 
-Phase 1 uses a bounded in-process executor with one worker.
-It is not a durable queue.
-If the API restarts, queued or running OCR work can be interrupted.
-On startup, the app marks stale `PROCESSING` jobs as `FAILED` with `PROCESS_INTERRUPTED`.
+`JOB_EXECUTOR_BACKEND` selects how a submitted job actually runs:
+
+- `celery` (the default in `docker-compose.yml` and required in production) dispatches jobs over
+  Valkey (self-hosted) or Managed Redis (production) to one or more `worker` processes -- a
+  durable queue that survives an API restart and scales horizontally across Droplets. See
+  "Production Deployment" below.
+- `thread_pool` (the default for local `pip install -e` runs and what the test suite uses) runs
+  jobs in a single in-process thread with no persistence across restarts -- fine for local
+  development, never for production. On startup, the app marks any stale `PROCESSING` job as
+  `FAILED` with `PROCESS_INTERRUPTED` regardless of which backend is active, since a hard restart
+  can still catch an in-flight job either way.
 
 ## Prerequisites
 
@@ -99,15 +110,24 @@ Leave it empty unless the upstream OCR configuration requires it.
 
 ## API Examples
 
+Documents are ingested exclusively via OneDrive share links -- there is no
+direct file-upload endpoint. See [`docs/frontend-integration.md`](docs/frontend-integration.md)
+for the full contract.
+
 ```bash
 curl http://localhost:8000/health
 
-curl -X POST http://localhost:8000/api/v1/jobs \
-  -F 'file=@/absolute/path/register.pdf'
+curl -X POST http://localhost:8000/api/v1/batches \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "Batch 1"}'
 
-curl http://localhost:8000/api/v1/jobs/<job-id>
+curl -X POST http://localhost:8000/api/v1/batches/<batch-id>/onedrive-links \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://1drv.ms/..."}'
 
-curl -OJ http://localhost:8000/api/v1/jobs/<job-id>/download
+curl http://localhost:8000/api/v1/jobs?batch_id=<batch-id>
+
+curl http://localhost:8000/api/v1/records?batch_id=<batch-id>
 ```
 
 ## Storage Layout
@@ -164,15 +184,47 @@ Frontend contract notes live in [`docs/frontend-integration.md`](docs/frontend-i
 ## Troubleshooting
 
 - Missing credentials: verify `GOOGLE_APPLICATION_CREDENTIALS` points to a readable JSON file.
-- Missing OCR config: verify `/opt/marriage-ocr/config/production.yaml` exists in the image or the local override path is correct.
+- Missing OCR config: verify `/opt/marriage-ocr/config/handwritten.yaml` and `/opt/marriage-ocr/config/typed_borang4b.yaml` exist in the image, or that `OCR_CONFIG_PATH_HANDWRITTEN`/`OCR_CONFIG_PATH_TYPED`/`OCR_CONFIG_DIR` point at valid local overrides.
 - Timeout: increase `OCR_TIMEOUT_SECONDS` if the OCR run legitimately takes longer.
 - Absent output: check the job logs under `storage/jobs/<job-id>/logs/`.
 
-## Future Production Migration
+## Production Deployment (Multiple DigitalOcean Droplets)
 
-Phase 1 intentionally keeps execution simple.
-For production, the natural next steps are:
+`docker-compose.yml` (single Droplet, local Postgres/Valkey/MinIO containers)
+is for development. For real horizontal scaling -- multiple worker Droplets
+processing OCR jobs off the same queue, independent of the API Droplet --
+use `docker-compose.production.yml` with `.env.production.example` as a
+starting point for your own `.env.production`.
 
-1. Replace `JobExecutor` with a durable worker queue such as Valkey/Celery.
-2. Move local storage to object storage such as DigitalOcean Spaces.
-3. Keep the current HTTP and database contract so the frontend does not need to change.
+That file defines only `api`, `worker`, and `beat` (no local
+postgres/valkey/minio) and requires everything to point at shared,
+externally-managed services instead:
+
+- **Managed Database for PostgreSQL** -- `DATABASE_URL`.
+- **Managed Redis** -- `VALKEY_URL` (fills Valkey's broker role; use `rediss://`).
+- **Spaces** -- `SPACES_ENDPOINT_URL`/`SPACES_BUCKET_NAME`/`SPACES_REGION_NAME`/
+  `SPACES_ACCESS_KEY_ID`/`SPACES_SECRET_ACCESS_KEY`, with `STORAGE_BACKEND=s3`.
+  This is what actually makes multi-Droplet workers possible: `jobs/processing.py`
+  materializes a job's input from Spaces if it isn't already on that
+  worker's local disk, and pushes the completed output back up so any API
+  instance can serve its download via a presigned URL -- not just the
+  Droplet that happened to run the job.
+
+Typical rollout:
+
+```bash
+# Build and tag once (CI, or manually), push to a registry:
+docker build -t registry.digitalocean.com/your-registry/marriage-be:latest .
+docker push registry.digitalocean.com/your-registry/marriage-be:latest
+
+# On the API Droplet:
+docker compose -f docker-compose.production.yml --env-file .env.production up -d api
+
+# On each worker Droplet (add more Droplets, or `--scale worker=N` on one,
+# to add throughput -- Celery load-balances across whatever's listening on
+# the queue, no code changes needed):
+docker compose -f docker-compose.production.yml --env-file .env.production up -d worker
+
+# On exactly ONE Droplet, total -- beat is a singleton scheduler:
+docker compose -f docker-compose.production.yml --env-file .env.production up -d beat
+```

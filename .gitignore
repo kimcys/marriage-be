@@ -8,6 +8,8 @@ build/
 *.egg-info/
 /storage/
 .env
+.env.production
+.env.*.local
 *.log
 *.sqlite3
 *.json.key

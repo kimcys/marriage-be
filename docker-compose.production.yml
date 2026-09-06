@@ -1,0 +1,116 @@
+x-ocr-common-env: &ocr-common-env
+  APP_NAME: ${APP_NAME:-Marriage OCR API}
+  APP_ENV: production
+  APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+  # A Managed Database for PostgreSQL connection string (Connection Details
+  # tab in the DigitalOcean console) -- not the local `postgres` container
+  # this same repo's docker-compose.yml uses for single-Droplet/dev setups.
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL to your Managed Postgres connection string}
+  STORAGE_ROOT: /app/storage
+  OCR_PYTHON_EXECUTABLE: /opt/venv/bin/python
+  OCR_MODULE: ${OCR_MODULE:-marriage_ocr.cli}
+  OCR_CONFIG_PATH_HANDWRITTEN: /opt/marriage-ocr/config/handwritten.yaml
+  OCR_CONFIG_PATH_TYPED: /opt/marriage-ocr/config/typed_borang4b.yaml
+  OCR_CONFIG_DIR: /opt/marriage-ocr/config
+  OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-3600}
+  OCR_STDERR_API_LIMIT: ${OCR_STDERR_API_LIMIT:-1000}
+  MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
+  MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-0c63526a981d06445e471f2632f5181ee5d4d7fd}
+  GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-vision.json
+  GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY}
+  # Every Droplet (api and every worker) must point at the same bucket --
+  # this is what lets a worker on one Droplet read a file an API instance
+  # or the OneDrive fetch task wrote on another. See jobs/processing.py's
+  # materialize-on-read / push-on-write and jobs/service.py's presigned
+  # download for why this isn't optional once you're past one Droplet.
+  STORAGE_BACKEND: s3
+  MINIO_ENDPOINT_URL: ${SPACES_ENDPOINT_URL:?set SPACES_ENDPOINT_URL, e.g. https://nyc3.digitaloceanspaces.com}
+  MINIO_BUCKET_NAME: ${SPACES_BUCKET_NAME:?set SPACES_BUCKET_NAME}
+  MINIO_REGION_NAME: ${SPACES_REGION_NAME:?set SPACES_REGION_NAME, e.g. nyc3}
+  MINIO_ACCESS_KEY_ID: ${SPACES_ACCESS_KEY_ID:?set SPACES_ACCESS_KEY_ID}
+  MINIO_SECRET_ACCESS_KEY: ${SPACES_SECRET_ACCESS_KEY:?set SPACES_SECRET_ACCESS_KEY}
+  # A Managed Redis connection string (DigitalOcean's Redis-compatible
+  # managed offering fills Valkey's role here) -- not the local `valkey`
+  # container. Use rediss:// (TLS) if the managed instance requires it.
+  VALKEY_URL: ${VALKEY_URL:?set VALKEY_URL to your Managed Redis connection string}
+  JOB_EXECUTOR_BACKEND: celery
+  OCR_MAX_CONCURRENT_JOBS: ${OCR_MAX_CONCURRENT_JOBS:-4}
+
+x-build: &build
+  context: .
+  args:
+    MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
+    MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-0c63526a981d06445e471f2632f5181ee5d4d7fd}
+
+# No postgres/valkey/minio services here on purpose -- this file is meant to
+# run on several Droplets (one running `api`, others running `worker`, and
+# exactly one running `beat`), all pointed at the same Managed Postgres,
+# Managed Redis, and Spaces bucket instead of anything local to one Droplet.
+#
+# Typical use: build and tag the image once (CI, or manually), push it to a
+# registry (e.g. DigitalOcean Container Registry), then on each Droplet:
+#   docker compose -f docker-compose.production.yml --env-file .env.production pull
+#   docker compose -f docker-compose.production.yml --env-file .env.production up -d <api|worker|beat>
+# `build:` is kept so the same file also works with `docker compose build`
+# if you'd rather build directly on a Droplet than use a registry.
+services:
+  api:
+    image: ${IMAGE_NAME:-registry.digitalocean.com/your-registry/marriage-be}:${IMAGE_TAG:-latest}
+    build: *build
+    environment:
+      <<: *ocr-common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      API_V1_PREFIX: ${API_V1_PREFIX:-/api/v1}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS to your frontend's real origin(s)}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-104857600}
+      UPLOAD_CHUNK_BYTES: ${UPLOAD_CHUNK_BYTES:-1048576}
+    volumes:
+      # Scratch space only now (S3/Spaces is the source of truth) -- doesn't
+      # need to be shared with other Droplets, but does need to survive
+      # container restarts on this one so in-flight uploads aren't lost.
+      - api_storage:/app/storage
+      - ${GOOGLE_APPLICATION_CREDENTIALS:?set path to your google-vision.json on this Droplet}:/run/secrets/google-vision.json:ro
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - alembic upgrade head && exec uvicorn marriage_ocr_api.main:app --host 0.0.0.0 --port 8000 --workers 1
+
+  worker:
+    image: ${IMAGE_NAME:-registry.digitalocean.com/your-registry/marriage-be}:${IMAGE_TAG:-latest}
+    build: *build
+    environment:
+      <<: *ocr-common-env
+    volumes:
+      - worker_storage:/app/storage
+      - ${GOOGLE_APPLICATION_CREDENTIALS:?set path to your google-vision.json on this Droplet}:/run/secrets/google-vision.json:ro
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - "exec celery -A marriage_ocr_api.jobs.celery_app worker --loglevel=info --concurrency=${OCR_MAX_CONCURRENT_JOBS:-4}"
+
+  # Run this on exactly ONE Droplet, total -- Celery beat is a singleton
+  # scheduler; a second instance would double-fire every periodic task
+  # (stale-job recovery, stale-export cleanup) instead of scaling anything.
+  beat:
+    image: ${IMAGE_NAME:-registry.digitalocean.com/your-registry/marriage-be}:${IMAGE_TAG:-latest}
+    build: *build
+    environment:
+      <<: *ocr-common-env
+    volumes:
+      - beat_storage:/app/storage
+      - ${GOOGLE_APPLICATION_CREDENTIALS:?set path to your google-vision.json on this Droplet}:/run/secrets/google-vision.json:ro
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - "exec celery -A marriage_ocr_api.jobs.celery_app beat --loglevel=info"
+
+volumes:
+  api_storage:
+  worker_storage:
+  beat_storage:
