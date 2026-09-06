@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,10 @@ from marriage_ocr_api.api.dependencies import get_db_session, get_onedrive_execu
 from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.repositories import get_batch
 from marriage_ocr_api.onedrive import repositories
-from marriage_ocr_api.onedrive.response_models import OneDriveSubmissionResponse
+from marriage_ocr_api.onedrive.response_models import (
+    OneDriveSubmissionResponse,
+    PaginatedOneDriveSubmissions,
+)
 from marriage_ocr_api.onedrive.schemas import OneDriveLinkCreateRequest
 from marriage_ocr_api.onedrive.service import (
     OneDriveExecutorProtocol,
@@ -76,3 +79,28 @@ def submit_onedrive_link(
         session.commit()
         raise ApiError(500, "INTERNAL_ERROR", "Failed to submit the OneDrive link for background processing.") from exc
     return JSONResponse(status_code=202, content=response.model_dump(mode="json"))
+
+
+@router.get(
+    "/{batch_id}/onedrive-links",
+    response_model=PaginatedOneDriveSubmissions,
+    operation_id="list_onedrive_links",
+)
+def list_onedrive_links(
+    batch_id: UUID,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_db_session),
+) -> PaginatedOneDriveSubmissions:
+    batch = get_batch(session, batch_id)
+    if batch is None:
+        raise _batch_not_found(batch_id)
+
+    items = repositories.list_submissions(session, batch_id=batch_id, limit=limit, offset=offset)
+    total = repositories.count_submissions(session, batch_id=batch_id)
+    return PaginatedOneDriveSubmissions(
+        items=[build_submission_response(item) for item in items],
+        limit=limit,
+        offset=offset,
+        total=total,
+    )

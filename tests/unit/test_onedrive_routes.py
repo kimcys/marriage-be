@@ -109,3 +109,43 @@ def test_submit_onedrive_link_for_missing_batch_returns_404(client: TestClient) 
     missing_batch_id = "00000000-0000-0000-0000-000000000000"
     response = client.post(f"/api/v1/batches/{missing_batch_id}/onedrive-links", json={"url": "https://1drv.ms/x"})
     assert response.status_code == 404
+
+
+def test_list_onedrive_links_returns_newest_first_and_scoped_to_batch(client: TestClient) -> None:
+    batch_id = _create_batch(client)
+    other_batch_id = _create_batch(client)
+
+    client.post(f"/api/v1/batches/{other_batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!other"})
+    client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!first"})
+    client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!second"})
+
+    response = client.get(f"/api/v1/batches/{batch_id}/onedrive-links")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert [item["url"] for item in payload["items"]] == [
+        "https://1drv.ms/f/s!second",
+        "https://1drv.ms/f/s!first",
+    ]
+    assert all(item["batch_id"] == batch_id for item in payload["items"])
+
+
+def test_list_onedrive_links_paginates(client: TestClient) -> None:
+    batch_id = _create_batch(client)
+    for i in range(3):
+        client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": f"https://1drv.ms/f/s!link{i}"})
+
+    response = client.get(f"/api/v1/batches/{batch_id}/onedrive-links", params={"limit": 2, "offset": 0})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 3
+    assert payload["limit"] == 2
+    assert len(payload["items"]) == 2
+
+
+def test_list_onedrive_links_for_missing_batch_returns_404(client: TestClient) -> None:
+    missing_batch_id = "00000000-0000-0000-0000-000000000000"
+    response = client.get(f"/api/v1/batches/{missing_batch_id}/onedrive-links")
+    assert response.status_code == 404

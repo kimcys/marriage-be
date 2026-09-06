@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.onedrive.models import OneDriveSubmission
@@ -20,6 +20,20 @@ def get_submission(session: Session, submission_id: UUID) -> OneDriveSubmission 
 
 def get_submission_by_url(session: Session, url: str) -> OneDriveSubmission | None:
     return session.scalar(select(OneDriveSubmission).where(OneDriveSubmission.url == url))
+
+
+def list_submissions(session: Session, *, batch_id: UUID, limit: int, offset: int) -> list[OneDriveSubmission]:
+    stmt: Select[tuple[OneDriveSubmission]] = select(OneDriveSubmission).where(
+        OneDriveSubmission.batch_id == batch_id
+    )
+    stmt = stmt.order_by(OneDriveSubmission.created_at.desc(), OneDriveSubmission.id.desc())
+    stmt = stmt.limit(limit).offset(offset)
+    return list(session.scalars(stmt))
+
+
+def count_submissions(session: Session, *, batch_id: UUID) -> int:
+    stmt = select(func.count()).select_from(OneDriveSubmission).where(OneDriveSubmission.batch_id == batch_id)
+    return int(session.scalar(stmt) or 0)
 
 
 def create_submission(session: Session, *, batch_id: UUID, url: str) -> OneDriveSubmission:

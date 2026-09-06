@@ -30,3 +30,10 @@ class OneDriveSubmissionResponse(BaseModel):
     updated_at: datetime
     fetched_at: datetime | None
     error: OneDriveSubmissionError | None = None
+
+
+class PaginatedOneDriveSubmissions(BaseModel):
+    items: list[OneDriveSubmissionResponse]
+    limit: int
+    offset: int
+    total: int

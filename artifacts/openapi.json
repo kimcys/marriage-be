@@ -759,6 +759,37 @@
         "title": "PaginatedJobs",
         "type": "object"
       },
+      "PaginatedOneDriveSubmissions": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OneDriveSubmissionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset",
+          "total"
+        ],
+        "title": "PaginatedOneDriveSubmissions",
+        "type": "object"
+      },
       "PaginatedRecordRevisions": {
         "properties": {
           "items": {
@@ -1343,6 +1374,70 @@
       }
     },
     "/api/v1/batches/{batch_id}/onedrive-links": {
+      "get": {
+        "operationId": "list_onedrive_links",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedOneDriveSubmissions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Onedrive Links",
+        "tags": [
+          "onedrive"
+        ]
+      },
       "post": {
         "operationId": "submit_onedrive_link",
         "parameters": [
