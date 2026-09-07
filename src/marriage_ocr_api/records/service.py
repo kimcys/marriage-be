@@ -45,8 +45,16 @@ def apply_correction(
     merged_field_values = {**record.field_values, **field_values}
     record.field_values = merged_field_values
     record.corrected_data = {**record.corrected_data, **field_values}
-    record.status = RecordStatus.PENDING_REVIEW.value
-    record.review_status = RecordStatus.PENDING_REVIEW.value
+    # A field is no longer "missing" once the correction gives it a
+    # non-empty value -- filling in the last flagged field auto-completes
+    # the record instead of requiring a separate approve click (mirrors the
+    # auto-computed status new records get in records/repositories.py).
+    record.missing_fields = [
+        field for field in record.missing_fields if not str(merged_field_values.get(field) or "").strip()
+    ]
+    resolved_status = RecordStatus.PENDING_REVIEW if record.missing_fields else RecordStatus.APPROVED
+    record.status = resolved_status.value
+    record.review_status = resolved_status.value
     record.reviewed_by = reviewer
     record.reviewed_at = utcnow()
     record.version = next_version

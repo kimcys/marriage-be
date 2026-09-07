@@ -39,6 +39,11 @@ celery_app.conf.beat_schedule = {
         # Once a day is plenty for a retention window measured in weeks.
         "schedule": 86400.0,
     },
+    "recover-stale-onedrive-submissions": {
+        "task": "marriage_ocr_api.onedrive.recover_stale_submissions",
+        # Same cadence as recover-stale-ocr-jobs, for the same reason.
+        "schedule": 300.0,
+    },
 }
 
 from marriage_ocr_api.exports import tasks as export_tasks  # noqa: E402,F401

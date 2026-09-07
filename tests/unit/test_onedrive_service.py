@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.repositories import create_batch, list_documents
 from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.repositories import list_jobs
-from marriage_ocr_api.onedrive.repositories import create_submission, get_submission
+from marriage_ocr_api.onedrive.repositories import create_submission, get_submission, mark_failed, mark_fetching
 from marriage_ocr_api.onedrive.runner import Classification, OneDriveFetchError
-from marriage_ocr_api.onedrive.service import run_onedrive_fetch
+from marriage_ocr_api.onedrive.service import recover_stale_submissions, retry_submission, run_onedrive_fetch
 from marriage_ocr_api.onedrive.status import OneDriveSubmissionStatus
 
 _FAKE_PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n"
@@ -210,3 +213,88 @@ def test_run_onedrive_fetch_summarizes_a_long_rich_traceback_stderr(tmp_path: Pa
         "RuntimeError: OneDrive rendered a page that isn't a recognizable file or folder listing."
     )
     check_session.close()
+
+
+class FakeOneDriveExecutor:
+    def __init__(self) -> None:
+        self.submitted: list[UUID] = []
+
+    def submit(self, submission_id: UUID) -> None:
+        self.submitted.append(submission_id)
+
+
+class FailingOneDriveExecutor:
+    def submit(self, submission_id: UUID) -> None:
+        raise RuntimeError("queue is down")
+
+
+def test_recover_stale_submissions_fails_only_ones_past_the_cutoff() -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    stale = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!stale")
+    fresh = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!fresh")
+    mark_fetching(session, stale.id)
+    mark_fetching(session, fresh.id)
+    stale_row = get_submission(session, stale.id)
+    stale_row.updated_at = datetime.now(UTC) - timedelta(seconds=7200)
+    session.commit()
+
+    recovered_count = recover_stale_submissions(session, stale_after_seconds=3600)
+    session.commit()
+
+    assert recovered_count == 1
+    assert get_submission(session, stale.id).status == OneDriveSubmissionStatus.FAILED.value
+    assert get_submission(session, fresh.id).status == OneDriveSubmissionStatus.FETCHING.value
+    session.close()
+
+
+def test_retry_submission_resets_and_resubmits_a_failed_submission() -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!retry")
+    mark_failed(session, submission.id, error_code="ONEDRIVE_FETCH_FAILED", error_message="sign-in required")
+    session.commit()
+
+    executor = FakeOneDriveExecutor()
+    retried = retry_submission(session, submission.id, executor)
+    session.commit()
+
+    assert retried.status == OneDriveSubmissionStatus.PENDING.value
+    assert retried.error_message is None
+    assert executor.submitted == [submission.id]
+    session.close()
+
+
+def test_retry_submission_rejects_a_submission_that_is_not_failed() -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!not-failed")
+    session.commit()
+
+    with pytest.raises(ApiError):
+        retry_submission(session, submission.id, FakeOneDriveExecutor())
+    session.close()
+
+
+def test_retry_submission_marks_failed_again_when_resubmission_itself_fails() -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!retry-fails")
+    mark_failed(session, submission.id, error_code="ONEDRIVE_FETCH_FAILED", error_message="sign-in required")
+    session.commit()
+
+    with pytest.raises(ApiError):
+        retry_submission(session, submission.id, FailingOneDriveExecutor())
+
+    updated = get_submission(session, submission.id)
+    assert updated.status == OneDriveSubmissionStatus.FAILED.value
+    assert updated.error_code == "INTERNAL_PROCESSING_ERROR"
+    session.close()

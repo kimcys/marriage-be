@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import Select, func, select
@@ -96,3 +96,53 @@ def mark_failed(
     submission.updated_at = now
     session.flush()
     return submission
+
+
+def mark_pending_for_retry(session: Session, submission_id: UUID) -> OneDriveSubmission:
+    submission = session.get(OneDriveSubmission, submission_id)
+    if submission is None:
+        raise ValueError(f"onedrive submission {submission_id} does not exist")
+    if submission.status != OneDriveSubmissionStatus.FAILED.value:
+        raise ValueError(f"onedrive submission {submission_id} is not failed")
+    submission.status = OneDriveSubmissionStatus.PENDING.value
+    submission.error_code = None
+    submission.error_message = None
+    submission.fetched_at = None
+    submission.updated_at = utcnow()
+    session.flush()
+    return submission
+
+
+def fail_stale_fetching_submissions(
+    session: Session, now: datetime, stale_after_seconds: float
+) -> list[OneDriveSubmission]:
+    """Fail FETCHING submissions that have been running far longer than any
+    real fetch+classify run should take -- the OneDrive counterpart of
+    db/repositories.py::fail_stale_processing_jobs. This model has no
+    started_at column; mark_fetching already bumps updated_at the moment a
+    submission enters FETCHING, so that's the timestamp staleness is judged
+    against.
+
+    Without this, a submission whose worker was killed mid-run (e.g. a
+    container recreate, exactly what left one submission stuck this way
+    once already) sits at FETCHING forever with no operator-visible error
+    and no way to retry it -- get_or_create_submission's URL dedup returns
+    the same stuck row unchanged for any repeat POST of that link.
+    """
+    cutoff = now - timedelta(seconds=stale_after_seconds)
+    submissions = list(
+        session.scalars(
+            select(OneDriveSubmission).where(
+                OneDriveSubmission.status == OneDriveSubmissionStatus.FETCHING.value,
+                OneDriveSubmission.updated_at < cutoff,
+            )
+        )
+    )
+    for submission in submissions:
+        submission.status = OneDriveSubmissionStatus.FAILED.value
+        submission.error_code = "PROCESSING_INTERRUPTED"
+        submission.error_message = "Processing was interrupted and did not complete. Retry this link to try again."
+        submission.fetched_at = now
+        submission.updated_at = now
+    session.flush()
+    return submissions

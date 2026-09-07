@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -11,11 +12,13 @@ from marriage_ocr_api.batches.repositories import create_batch
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.onedrive.repositories import (
     create_submission,
+    fail_stale_fetching_submissions,
     get_submission,
     get_submission_by_url,
     mark_failed,
     mark_fetched,
     mark_fetching,
+    mark_pending_for_retry,
 )
 from marriage_ocr_api.onedrive.status import OneDriveSubmissionStatus
 
@@ -83,3 +86,52 @@ def test_mark_failed_records_error(session: Session) -> None:
     assert updated.status == OneDriveSubmissionStatus.FAILED.value
     assert updated.error_code == "ONEDRIVE_FETCH_FAILED"
     assert updated.error_message == "sign-in required"
+
+
+def test_mark_pending_for_retry_resets_a_failed_submission(session: Session) -> None:
+    batch_id = _batch_id(session)
+    submission = create_submission(session, batch_id=batch_id, url="https://1drv.ms/f/s!retry")
+    mark_failed(session, submission.id, error_code="ONEDRIVE_FETCH_FAILED", error_message="sign-in required")
+
+    updated = mark_pending_for_retry(session, submission.id)
+
+    assert updated.status == OneDriveSubmissionStatus.PENDING.value
+    assert updated.error_code is None
+    assert updated.error_message is None
+    assert updated.fetched_at is None
+
+
+def test_mark_pending_for_retry_rejects_a_non_failed_submission(session: Session) -> None:
+    batch_id = _batch_id(session)
+    submission = create_submission(session, batch_id=batch_id, url="https://1drv.ms/f/s!not-failed")
+
+    with pytest.raises(ValueError):
+        mark_pending_for_retry(session, submission.id)
+
+
+def test_fail_stale_fetching_submissions_only_fails_ones_past_the_cutoff(session: Session) -> None:
+    batch_id = _batch_id(session)
+    stale = create_submission(session, batch_id=batch_id, url="https://1drv.ms/f/s!stale")
+    fresh = create_submission(session, batch_id=batch_id, url="https://1drv.ms/f/s!fresh")
+    mark_fetching(session, stale.id)
+    mark_fetching(session, fresh.id)
+
+    now = datetime.now(UTC)
+    # mark_fetching stamped updated_at at "now" for both -- push the stale
+    # one's clock back past a small threshold so only it is judged stale.
+    stale_row = get_submission(session, stale.id)
+    assert stale_row is not None
+    stale_row.updated_at = now - timedelta(seconds=120)
+    session.flush()
+
+    recovered = fail_stale_fetching_submissions(session, now, stale_after_seconds=60)
+
+    assert [item.id for item in recovered] == [stale.id]
+    recovered_submission = get_submission(session, stale.id)
+    assert recovered_submission is not None
+    assert recovered_submission.status == OneDriveSubmissionStatus.FAILED.value
+    assert recovered_submission.error_code == "PROCESSING_INTERRUPTED"
+
+    still_fetching = get_submission(session, fresh.id)
+    assert still_fetching is not None
+    assert still_fetching.status == OneDriveSubmissionStatus.FETCHING.value

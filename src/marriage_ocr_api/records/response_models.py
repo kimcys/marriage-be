@@ -33,6 +33,7 @@ class RecordResponse(BaseModel):
     field_values: dict[str, object]
     confidence: float | None
     validation_issues: list[str]
+    missing_fields: list[str]
     reviewed_by: str | None
     reviewed_at: datetime | None
     version: int

@@ -90,11 +90,31 @@ def test_create_get_and_list_records(session: Session) -> None:
     fetched = get_record(session, older.id)
     assert fetched is not None
     assert fetched.source_key == "page-1-row-1"
-    assert fetched.status == RecordStatus.PENDING_REVIEW.value
+    # Nothing missing -- auto-approved, no reviewer action needed.
+    assert fetched.status == RecordStatus.APPROVED.value
 
     records = list_records(session, job_id=job_id, batch_id=None, status=None, limit=20, offset=0)
     assert [record.id for record in records] == [newer.id, older.id]
     assert count_records(session, job_id=job_id, batch_id=None, status=None) == 2
+
+
+def test_create_record_with_missing_fields_starts_pending_review(session: Session) -> None:
+    job_id = _job(session)
+    record = create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-1",
+        field_values={"full_name": "Ada Lovelace"},
+        confidence=0.6,
+        validation_issues=["missing ic number"],
+        missing_fields=["ic_number"],
+    )
+    session.commit()
+
+    fetched = get_record(session, record.id)
+    assert fetched is not None
+    assert fetched.status == RecordStatus.PENDING_REVIEW.value
+    assert fetched.missing_fields == ["ic_number"]
 
 
 def test_list_records_filters_by_free_text_query(session: Session) -> None:

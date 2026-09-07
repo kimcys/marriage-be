@@ -993,6 +993,13 @@
             "title": "Job Id",
             "type": "string"
           },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Fields",
+            "type": "array"
+          },
           "reviewed_at": {
             "anyOf": [
               {
@@ -1050,6 +1057,7 @@
           "field_values",
           "confidence",
           "validation_issues",
+          "missing_fields",
           "reviewed_by",
           "reviewed_at",
           "version",
@@ -1493,6 +1501,59 @@
           }
         },
         "summary": "Submit Onedrive Link",
+        "tags": [
+          "onedrive"
+        ]
+      }
+    },
+    "/api/v1/batches/{batch_id}/onedrive-links/{submission_id}/retry": {
+      "post": {
+        "operationId": "retry_onedrive_link",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Submission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OneDriveSubmissionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Onedrive Link",
         "tags": [
           "onedrive"
         ]

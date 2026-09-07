@@ -16,6 +16,7 @@ _METADATA_COLUMNS = {
     "Updated At",
     "Status Review",
     "Review Reason",
+    "Missing Fields",
     "Source File",
     "Source Page",
     "Source Record",
@@ -48,10 +49,10 @@ def _record_index_from_source_record(value: object) -> int:
     return int(digits) if digits else 0
 
 
-def _validation_issues_from_review_reason(value: object) -> list[str]:
+def _split_semicolon_list(value: object) -> list[str]:
     if not value:
         return []
-    return [issue.strip() for issue in str(value).split(";") if issue.strip()]
+    return [item.strip() for item in str(value).split(";") if item.strip()]
 
 
 def import_records_from_xlsx(
@@ -124,7 +125,8 @@ def import_records_from_xlsx(
                     "source_record_index": _record_index_from_source_record(source_record),
                     "field_values": field_values,
                     "confidence": confidence,
-                    "validation_issues": _validation_issues_from_review_reason(record.get("Review Reason")),
+                    "validation_issues": _split_semicolon_list(record.get("Review Reason")),
+                    "missing_fields": _split_semicolon_list(record.get("Missing Fields")),
                 },
             ):
                 created += 1
@@ -138,13 +140,18 @@ def _typed_validation_issues(record: dict[str, object]) -> list[str]:
     review_required = str(record.get("Review Required") or "").strip().lower()
     if review_required in {"true", "1", "yes"}:
         issues.append("review required")
-    failed_fields = str(record.get("Failed Fields") or "").strip()
-    if failed_fields:
-        issues.extend(field.strip() for field in failed_fields.split(",") if field.strip())
     error_message = str(record.get("Error Message") or "").strip()
     if error_message:
         issues.append(error_message)
     return issues
+
+
+def _typed_missing_fields(record: dict[str, object]) -> list[str]:
+    # marriage-ocr's typed pipeline semicolon-joins failed_fields (see
+    # TypedDocumentResult.failed_fields_text) -- the same delimiter
+    # _split_semicolon_list already handles for the handwritten "Missing
+    # Fields"/"Review Reason" columns.
+    return _split_semicolon_list(record.get("Failed Fields"))
 
 
 def import_records_from_csv(
@@ -192,6 +199,7 @@ def import_records_from_csv(
                     "field_values": field_values,
                     "confidence": None,
                     "validation_issues": _typed_validation_issues(record),
+                    "missing_fields": _typed_missing_fields(record),
                 },
             ):
                 created += 1

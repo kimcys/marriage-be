@@ -20,6 +20,7 @@ from marriage_ocr_api.onedrive.service import (
     OneDriveExecutorProtocol,
     build_submission_response,
     get_or_create_submission,
+    retry_submission,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,3 +105,26 @@ def list_onedrive_links(
         offset=offset,
         total=total,
     )
+
+
+@router.post(
+    "/{batch_id}/onedrive-links/{submission_id}/retry",
+    response_model=OneDriveSubmissionResponse,
+    operation_id="retry_onedrive_link",
+)
+def retry_onedrive_link(
+    batch_id: UUID,
+    submission_id: UUID,
+    session: Session = Depends(get_db_session),
+    executor: OneDriveExecutorProtocol = Depends(get_onedrive_executor),
+) -> OneDriveSubmissionResponse:
+    batch = get_batch(session, batch_id)
+    if batch is None:
+        raise _batch_not_found(batch_id)
+
+    submission = repositories.get_submission(session, submission_id)
+    if submission is None or submission.batch_id != batch_id:
+        raise ApiError(404, "SUBMISSION_NOT_FOUND", f"OneDrive submission {submission_id} not found in this batch.")
+
+    submission = retry_submission(session, submission_id, executor)
+    return build_submission_response(submission)

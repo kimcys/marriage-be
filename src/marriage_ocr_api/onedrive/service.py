@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.document_ingest import create_document_page_jobs, document_paths, split_page_count
 from marriage_ocr_api.batches.repositories import create_document, recompute_batch_status, recompute_document_status
 from marriage_ocr_api.batches.status import DocumentType
@@ -313,3 +314,44 @@ def run_onedrive_fetch(
             "INTERNAL_PROCESSING_ERROR",
             "The OneDrive submission encountered an internal processing error.",
         )
+
+
+def recover_stale_submissions(session: Session, stale_after_seconds: float) -> int:
+    """Periodic recovery for submissions abandoned by a crashed or killed
+    worker mid-run (fetch or classify) -- the OneDrive counterpart of
+    jobs/service.py::recover_stale_jobs. See
+    onedrive/repositories.py::fail_stale_fetching_submissions.
+    """
+    failed = repositories.fail_stale_fetching_submissions(session, _utcnow(), stale_after_seconds)
+    return len(failed)
+
+
+def retry_submission(session: Session, submission_id: UUID, executor: OneDriveExecutorProtocol) -> OneDriveSubmission:
+    """Re-run a FAILED submission's fetch+classify from scratch. Needed
+    because get_or_create_submission's URL-uniqueness dedup means a plain
+    repeat POST of the same link returns the existing (failed) row
+    unchanged and triggers no new fetch -- this is the only way to actually
+    retry it (mirrors jobs/service.py::retry_job).
+    """
+    submission = repositories.get_submission(session, submission_id)
+    if submission is None:
+        raise ApiError(404, "SUBMISSION_NOT_FOUND", "OneDrive submission not found.")
+    if submission.status != OneDriveSubmissionStatus.FAILED.value:
+        raise ApiError(409, "SUBMISSION_NOT_FAILED", "Only a failed submission can be retried.")
+
+    submission = repositories.mark_pending_for_retry(session, submission_id)
+    session.commit()
+
+    try:
+        logger.info("resubmitting onedrive submission %s for retry", submission_id)
+        executor.submit(submission_id)
+    except Exception as exc:
+        repositories.mark_failed(
+            session,
+            submission_id,
+            error_code="INTERNAL_PROCESSING_ERROR",
+            error_message="The OneDrive submission could not be resubmitted for background processing.",
+        )
+        session.commit()
+        raise ApiError(500, "INTERNAL_ERROR", "Failed to resubmit OneDrive submission.") from exc
+    return submission

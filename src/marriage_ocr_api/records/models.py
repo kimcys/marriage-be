@@ -58,6 +58,11 @@ class OCRRecord(Base):
     corrected_data: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     confidence: Mapped[float | None] = mapped_column(nullable=True)
     validation_issues: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    # Which business fields are actually absent (a subset of
+    # validation_issues -- see records/repositories.py and
+    # records/service.py::apply_correction, which use this to auto-compute
+    # status instead of requiring a manual approve/reject).
+    missing_fields: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     review_status: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="PENDING")
     reviewed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

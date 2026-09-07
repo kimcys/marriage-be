@@ -44,6 +44,16 @@ def _get_record_by_key(
     return session.scalar(stmt)
 
 
+def _initial_status_for(missing_fields: list[str]) -> RecordStatus:
+    """A record with nothing missing needs no reviewer action at all --
+    APPROVED from the moment it's created. Only a record with at least one
+    flagged field starts PENDING_REVIEW, so the review queue only ever
+    surfaces records that actually need attention (see
+    records/service.py::apply_correction for the matching re-check when a
+    missing field is filled in)."""
+    return RecordStatus.PENDING_REVIEW if missing_fields else RecordStatus.APPROVED
+
+
 def create_record(
     session: Session,
     *,
@@ -58,8 +68,9 @@ def create_record(
     corrected_data: dict[str, object] | None = None,
     confidence: float | None,
     validation_issues: list[str],
-    status: RecordStatus = RecordStatus.PENDING_REVIEW,
-    review_status: str = "PENDING",
+    missing_fields: list[str] | None = None,
+    status: RecordStatus | None = None,
+    review_status: str | None = None,
     reviewed_by: str | None = None,
     reviewed_at: datetime | None = None,
     version: int = 1,
@@ -76,6 +87,10 @@ def create_record(
     if existing is not None:
         raise RecordConflictError(f"record {job_id}:{source_key} already exists")
 
+    missing_fields = missing_fields or []
+    resolved_status = status if status is not None else _initial_status_for(missing_fields)
+    resolved_review_status = review_status if review_status is not None else resolved_status.value
+
     now = utcnow()
     record = OCRRecord(
         job_id=job_id,
@@ -89,8 +104,9 @@ def create_record(
         corrected_data=corrected_data or {},
         confidence=confidence,
         validation_issues=validation_issues,
-        status=status.value,
-        review_status=review_status,
+        missing_fields=missing_fields,
+        status=resolved_status.value,
+        review_status=resolved_review_status,
         reviewed_by=reviewed_by,
         reviewed_at=reviewed_at,
         version=version,
@@ -135,6 +151,9 @@ def create_record_if_missing(
     validation_issues = payload.get("validation_issues", [])
     if not isinstance(validation_issues, list):
         validation_issues = []
+    missing_fields = payload.get("missing_fields", [])
+    if not isinstance(missing_fields, list):
+        missing_fields = []
     normalized_data = payload.get("normalized_data")
     corrected_data = payload.get("corrected_data")
     create_record(
@@ -150,6 +169,7 @@ def create_record_if_missing(
         corrected_data=cast(dict[str, object], corrected_data) if isinstance(corrected_data, dict) else None,
         confidence=cast(float | None, payload.get("confidence")),
         validation_issues=cast(list[str], validation_issues),
+        missing_fields=cast(list[str], missing_fields),
     )
     return True
 

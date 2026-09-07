@@ -79,13 +79,17 @@ def test_record_review_api_lists_and_updates_records(client: TestClient, session
         stderr_log_relative_path="jobs/123/logs/stderr.log",
         ocr_git_ref="abc123",
     )
+    # A record with a flagged missing field starts PENDING_REVIEW; one with
+    # nothing missing would already be APPROVED and need no reviewer action
+    # at all (records/repositories.py::_initial_status_for).
     record = create_record(
         session,
         job_id=job_id,
         source_key="page-1-row-1",
-        field_values={"full_name": "Ada Lovelace"},
+        field_values={},
         confidence=0.97,
         validation_issues=[],
+        missing_fields=["full_name"],
     )
     session.commit()
 
@@ -95,18 +99,26 @@ def test_record_review_api_lists_and_updates_records(client: TestClient, session
 
     detail = client.get(f"/api/v1/records/{record.id}")
     assert detail.status_code == 200
+    assert detail.json()["status"] == "PENDING_REVIEW"
+    assert detail.json()["missing_fields"] == ["full_name"]
 
+    # Filling in the only missing field auto-completes the record -- no
+    # separate approve call needed.
     patch = client.patch(
         f"/api/v1/records/{record.id}",
-        json={"version": 1, "field_values": {"full_name": "Ada Byron"}, "note": "corrected surname"},
+        json={"version": 1, "field_values": {"full_name": "Ada Byron"}, "note": "filled in missing name"},
     )
     assert patch.status_code == 200
     assert patch.json()["version"] == 2
+    assert patch.json()["status"] == "APPROVED"
+    assert patch.json()["missing_fields"] == []
 
+    # approve/reject stay available (unused by the default FE flow now) and
+    # are idempotent against a record that's already APPROVED.
     approve = client.post(f"/api/v1/records/{record.id}/approve", json={"version": 2})
     assert approve.status_code == 200
     assert approve.json()["status"] == "APPROVED"
 
     revisions = client.get(f"/api/v1/records/{record.id}/revisions")
     assert revisions.status_code == 200
-    assert revisions.json()["total"] == 2
+    assert revisions.json()["total"] == 1

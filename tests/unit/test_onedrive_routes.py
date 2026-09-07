@@ -13,6 +13,7 @@ from marriage_ocr_api.api.dependencies import get_db_session
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.main import create_app
+from marriage_ocr_api.onedrive.repositories import mark_failed
 
 
 class FakeOneDriveExecutor:
@@ -57,6 +58,19 @@ def _create_batch(client: TestClient) -> str:
     response = client.post("/api/v1/batches", json={"name": "Batch 1"})
     assert response.status_code == 201
     return response.json()["id"]
+
+
+def _fail_submission(engine, submission_id: str) -> None:
+    """Directly flips a submission to FAILED, bypassing the (fake, always-
+    succeeding) executor -- there's no other way to get a submission into
+    FAILED through this test client's HTTP surface alone."""
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    try:
+        mark_failed(session, UUID(submission_id), error_code="ONEDRIVE_FETCH_FAILED", error_message="sign-in required")
+        session.commit()
+    finally:
+        session.close()
 
 
 def test_submit_onedrive_link_creates_pending_submission(client: TestClient) -> None:
@@ -148,4 +162,50 @@ def test_list_onedrive_links_paginates(client: TestClient) -> None:
 def test_list_onedrive_links_for_missing_batch_returns_404(client: TestClient) -> None:
     missing_batch_id = "00000000-0000-0000-0000-000000000000"
     response = client.get(f"/api/v1/batches/{missing_batch_id}/onedrive-links")
+    assert response.status_code == 404
+
+
+def test_retry_onedrive_link_resubmits_a_failed_submission(client: TestClient, engine) -> None:
+    batch_id = _create_batch(client)
+    created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!retry"})
+    submission_id = created.json()["id"]
+    _fail_submission(engine, submission_id)
+
+    response = client.post(f"/api/v1/batches/{batch_id}/onedrive-links/{submission_id}/retry")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "PENDING"
+    assert payload["error"] is None
+    executor: FakeOneDriveExecutor = client.app.state.onedrive_executor
+    assert str(executor.submitted[-1]) == submission_id
+
+
+def test_retry_onedrive_link_rejects_a_submission_that_is_not_failed(client: TestClient) -> None:
+    batch_id = _create_batch(client)
+    created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!pending"})
+    submission_id = created.json()["id"]
+
+    response = client.post(f"/api/v1/batches/{batch_id}/onedrive-links/{submission_id}/retry")
+
+    assert response.status_code == 409
+
+
+def test_retry_onedrive_link_for_missing_submission_returns_404(client: TestClient) -> None:
+    batch_id = _create_batch(client)
+    missing_submission_id = "00000000-0000-0000-0000-000000000000"
+
+    response = client.post(f"/api/v1/batches/{batch_id}/onedrive-links/{missing_submission_id}/retry")
+
+    assert response.status_code == 404
+
+
+def test_retry_onedrive_link_scoped_to_the_wrong_batch_returns_404(client: TestClient) -> None:
+    batch_id = _create_batch(client)
+    other_batch_id = _create_batch(client)
+    created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!scoped"})
+    submission_id = created.json()["id"]
+
+    response = client.post(f"/api/v1/batches/{other_batch_id}/onedrive-links/{submission_id}/retry")
+
     assert response.status_code == 404
