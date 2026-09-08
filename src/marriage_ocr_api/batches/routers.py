@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
-from marriage_ocr_api.api.dependencies import get_db_session
+from marriage_ocr_api.api.dependencies import get_db_session, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.repositories import count_batches, create_batch, get_batch, list_batches
 from marriage_ocr_api.batches.response_models import BatchCreateRequest, BatchResponse, PaginatedBatches
+from marriage_ocr_api.batches.service import delete_batch
+from marriage_ocr_api.core.config import Settings
 
 router = APIRouter(prefix="/api/v1/batches", tags=["batches"])
 
@@ -65,3 +67,16 @@ def get_one_batch(batch_id: UUID, session: Session = Depends(get_db_session)) ->
     if batch is None:
         raise _batch_not_found(batch_id)
     return BatchResponse.model_validate(batch)
+
+
+@router.delete("/{batch_id}", status_code=204, operation_id="delete_batch")
+def delete_one_batch(
+    batch_id: UUID,
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(settings_dependency),
+) -> Response:
+    batch = get_batch(session, batch_id)
+    if batch is None:
+        raise _batch_not_found(batch_id)
+    delete_batch(session, settings, batch_id)
+    return Response(status_code=204)

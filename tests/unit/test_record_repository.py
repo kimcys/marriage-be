@@ -148,6 +148,51 @@ def test_list_records_filters_by_free_text_query(session: Session) -> None:
     assert no_match == []
 
 
+def test_list_records_filters_by_record_type(session: Session) -> None:
+    job_id = _job(session)
+    nikah = create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-1",
+        field_values={"Nama Suami": "Ahmad", "Record Type": "NIKAH"},
+        confidence=0.9,
+        validation_issues=[],
+    )
+    create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-2",
+        field_values={"Nama Suami": "Ahmad", "Record Type": "CERAI"},
+        confidence=0.9,
+        validation_issues=[],
+    )
+    create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-3",
+        field_values={"Nama Suami": "Ahmad", "Record Type": "RUJUK"},
+        confidence=0.9,
+        validation_issues=[],
+    )
+    session.commit()
+
+    nikah_only = list_records(
+        session, job_id=job_id, batch_id=None, status=None, record_type="NIKAH", limit=20, offset=0
+    )
+    assert [record.id for record in nikah_only] == [nikah.id]
+    assert count_records(session, job_id=job_id, batch_id=None, status=None, record_type="NIKAH") == 1
+
+    # Case-insensitive, matching the query param as a reviewer would type it.
+    lowercase = list_records(
+        session, job_id=job_id, batch_id=None, status=None, record_type="cerai", limit=20, offset=0
+    )
+    assert len(lowercase) == 1
+    assert lowercase[0].field_values["Record Type"] == "CERAI"
+
+    all_types = list_records(session, job_id=job_id, batch_id=None, status=None, limit=20, offset=0)
+    assert len(all_types) == 3
+
+
 def test_list_records_filters_by_onedrive_source_url(session: Session) -> None:
     job_id = _job(session)
     batch = create_batch(session, name="Batch 1", description=None, created_by=None)

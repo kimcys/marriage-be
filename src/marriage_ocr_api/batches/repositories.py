@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, delete, func, select
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.batches.models import Batch, Document, Export
@@ -11,6 +11,8 @@ from marriage_ocr_api.batches.schemas import ExportFormat
 from marriage_ocr_api.batches.status import BatchStatus, DocumentStatus, DocumentType, ExportStatus
 from marriage_ocr_api.db.models import OCRJob
 from marriage_ocr_api.jobs.status import JobStatus
+from marriage_ocr_api.onedrive.models import OneDriveSubmission
+from marriage_ocr_api.records.models import OCRRecord, RecordRevision
 
 
 def utcnow() -> datetime:
@@ -230,6 +232,27 @@ def count_exports(session: Session) -> int:
 def delete_export(session: Session, export: Export) -> None:
     session.delete(export)
     session.flush()
+
+
+def delete_batch_row(session: Session, batch_id: UUID) -> None:
+    """Explicit, application-level cascade -- Batch has no ORM
+    relationship() cascades configured, and the DB-level FK ondelete
+    clauses (CASCADE for documents/exports/onedrive_submissions, SET NULL
+    for jobs/records) only fire if the database itself enforces foreign
+    keys, which SQLite (used by this test suite) doesn't do by default.
+    Deletes everything scoped to this batch, in dependency order, before
+    the batch row itself -- unlike a bare SET NULL, a deleted batch takes
+    its jobs/records with it rather than leaving them orphaned with no
+    batch_id, cluttering the cross-batch records list.
+    """
+    record_ids = select(OCRRecord.id).where(OCRRecord.batch_id == batch_id)
+    session.execute(delete(RecordRevision).where(RecordRevision.record_id.in_(record_ids)))
+    session.execute(delete(OCRRecord).where(OCRRecord.batch_id == batch_id))
+    session.execute(delete(OCRJob).where(OCRJob.batch_id == batch_id))
+    session.execute(delete(Document).where(Document.batch_id == batch_id))
+    session.execute(delete(OneDriveSubmission).where(OneDriveSubmission.batch_id == batch_id))
+    session.execute(delete(Export).where(Export.batch_id == batch_id))
+    session.execute(delete(Batch).where(Batch.id == batch_id))
 
 
 def list_stale_exports(session: Session, older_than: datetime) -> list[Export]:

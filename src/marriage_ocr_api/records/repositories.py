@@ -193,6 +193,7 @@ def _apply_record_filters[T: Select[Any]](
     status: RecordStatus | None,
     q: str | None,
     source_url: str | None,
+    record_type: str | None = None,
 ) -> T:
     if job_id is not None:
         stmt = stmt.where(OCRRecord.job_id == job_id)
@@ -200,6 +201,15 @@ def _apply_record_filters[T: Select[Any]](
         stmt = stmt.where(OCRRecord.batch_id == batch_id)
     if status is not None:
         stmt = stmt.where(OCRRecord.status == status.value)
+    if record_type:
+        # marriage-ocr always writes a "Record Type" business field
+        # (NIKAH/CERAI/RUJUK, uppercased) regardless of doc_type (typed vs
+        # handwritten) or layout (legacy vs modern) -- see
+        # marriage_ocr/typed/pipeline.py and validation.py -- so it's a
+        # reliable key to filter on directly, unlike free-text q.
+        # as_string() is SQLAlchemy's portable JSON-key accessor, compiling
+        # to json_extract on SQLite (tests) and ->> on Postgres.
+        stmt = stmt.where(OCRRecord.field_values["Record Type"].as_string() == record_type.upper())
     if q:
         # Free-text search over the extracted field values (e.g. full_name,
         # ic_number) without needing to know which field to match on --
@@ -229,11 +239,14 @@ def list_records(
     status: RecordStatus | None,
     q: str | None = None,
     source_url: str | None = None,
+    record_type: str | None = None,
     limit: int,
     offset: int,
 ) -> list[OCRRecord]:
     stmt: Select[tuple[OCRRecord]] = select(OCRRecord)
-    stmt = _apply_record_filters(stmt, job_id=job_id, batch_id=batch_id, status=status, q=q, source_url=source_url)
+    stmt = _apply_record_filters(
+        stmt, job_id=job_id, batch_id=batch_id, status=status, q=q, source_url=source_url, record_type=record_type
+    )
     stmt = stmt.order_by(OCRRecord.created_at.desc(), OCRRecord.id.desc()).limit(limit).offset(offset)
     return list(session.scalars(stmt))
 
@@ -246,9 +259,12 @@ def count_records(
     status: RecordStatus | None,
     q: str | None = None,
     source_url: str | None = None,
+    record_type: str | None = None,
 ) -> int:
     stmt = select(func.count()).select_from(OCRRecord)
-    stmt = _apply_record_filters(stmt, job_id=job_id, batch_id=batch_id, status=status, q=q, source_url=source_url)
+    stmt = _apply_record_filters(
+        stmt, job_id=job_id, batch_id=batch_id, status=status, q=q, source_url=source_url, record_type=record_type
+    )
     return int(session.scalar(stmt) or 0)
 
 

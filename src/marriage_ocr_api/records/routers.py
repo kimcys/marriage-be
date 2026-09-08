@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.api.dependencies import get_db_session
@@ -30,7 +30,13 @@ from marriage_ocr_api.records.response_models import (
     RecordResponse,
     RecordReviewRequest,
 )
-from marriage_ocr_api.records.service import apply_correction, approve_record, bulk_approve_records, reject_record
+from marriage_ocr_api.records.service import (
+    apply_correction,
+    approve_record,
+    bulk_approve_records,
+    delete_record,
+    reject_record,
+)
 from marriage_ocr_api.records.status import RecordStatus
 
 router = APIRouter()
@@ -50,14 +56,27 @@ def list_all_records(
     status: RecordStatus | None = Query(default=None),
     q: str | None = Query(default=None, description="Free-text search over the record's extracted field values"),
     source_url: str | None = Query(default=None, description="Filter to records from this OneDrive share link"),
+    record_type: str | None = Query(
+        default=None, description="Filter to this record type (NIKAH, CERAI, or RUJUK)"
+    ),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> PaginatedRecords:
     items = list_records(
-        session, job_id=None, batch_id=batch_id, status=status, q=q, source_url=source_url, limit=limit, offset=offset
+        session,
+        job_id=None,
+        batch_id=batch_id,
+        status=status,
+        q=q,
+        source_url=source_url,
+        record_type=record_type,
+        limit=limit,
+        offset=offset,
     )
-    total = count_records(session, job_id=None, batch_id=batch_id, status=status, q=q, source_url=source_url)
+    total = count_records(
+        session, job_id=None, batch_id=batch_id, status=status, q=q, source_url=source_url, record_type=record_type
+    )
     return build_records_page(items, limit, offset, total)
 
 
@@ -86,6 +105,15 @@ def get_record(record_id: UUID, session: Session = Depends(get_db_session)) -> R
     except RecordNotFoundError as exc:
         raise _not_found("OCR record not found.") from exc
     return build_record_response(record)
+
+
+@router.delete("/api/v1/records/{record_id}", status_code=204, operation_id="delete_record")
+def delete_one_record(record_id: UUID, session: Session = Depends(get_db_session)) -> Response:
+    try:
+        delete_record(session, record_id)
+    except RecordNotFoundError as exc:
+        raise _not_found("OCR record not found.") from exc
+    return Response(status_code=204)
 
 
 @router.get(

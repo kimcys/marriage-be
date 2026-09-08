@@ -166,6 +166,49 @@ def test_list_records_supports_free_text_search(client: TestClient, session: Ses
     assert payload["items"][0]["id"] == str(second_id)
 
 
+def test_list_records_supports_filtering_by_record_type(client: TestClient, session: Session) -> None:
+    job_id = UUID("123e4567-e89b-12d3-a456-426614175500")
+    create_job(
+        session,
+        id=job_id,
+        status=JobStatus.COMPLETED,
+        original_filename="register.pdf",
+        stored_filename="source.pdf",
+        content_type="application/pdf",
+        file_size_bytes=123,
+        input_relative_path="jobs/123/input/source.pdf",
+        output_relative_path="jobs/123/output/result.xlsx",
+        debug_relative_path="jobs/123/debug",
+        stdout_log_relative_path="jobs/123/logs/stdout.log",
+        stderr_log_relative_path="jobs/123/logs/stderr.log",
+        ocr_git_ref="abc123",
+    )
+    nikah = create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-1",
+        field_values={"Nama Suami": "Ahmad", "Record Type": "NIKAH"},
+        confidence=0.9,
+        validation_issues=[],
+    )
+    create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-2",
+        field_values={"Nama Suami": "Ahmad", "Record Type": "CERAI"},
+        confidence=0.9,
+        validation_issues=[],
+    )
+    session.commit()
+
+    response = client.get("/api/v1/records", params={"record_type": "NIKAH"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["id"] == str(nikah.id)
+
+
 def test_list_records_supports_filtering_by_onedrive_source_url(client: TestClient, session: Session) -> None:
     first_id, _, _ = _seed_records(session)
 
@@ -220,6 +263,21 @@ def test_list_records_supports_filtering_by_onedrive_source_url(client: TestClie
     assert payload["total"] == 1
     assert payload["items"][0]["id"] == str(linked_record.id)
     assert first_id not in [UUID(item["id"]) for item in payload["items"]]
+
+
+def test_delete_record_removes_it(client: TestClient, session: Session) -> None:
+    first_id, _, _ = _seed_records(session)
+
+    response = client.delete(f"/api/v1/records/{first_id}")
+
+    assert response.status_code == 204
+    assert client.get(f"/api/v1/records/{first_id}").status_code == 404
+
+
+def test_delete_missing_record_returns_404(client: TestClient) -> None:
+    missing_id = "00000000-0000-0000-0000-000000000000"
+    response = client.delete(f"/api/v1/records/{missing_id}")
+    assert response.status_code == 404
 
 
 def test_record_routes_return_conflicts_as_api_errors(client: TestClient, session: Session) -> None:

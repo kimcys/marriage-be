@@ -1339,6 +1339,40 @@
       }
     },
     "/api/v1/batches/{batch_id}": {
+      "delete": {
+        "operationId": "delete_batch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete One Batch",
+        "tags": [
+          "batches"
+        ]
+      },
       "get": {
         "operationId": "get_batch",
         "parameters": [
@@ -2186,6 +2220,24 @@
             }
           },
           {
+            "description": "Filter to this record type (NIKAH, CERAI, or RUJUK)",
+            "in": "query",
+            "name": "record_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to this record type (NIKAH, CERAI, or RUJUK)",
+              "title": "Record Type"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
@@ -2273,6 +2325,37 @@
       }
     },
     "/api/v1/records/{record_id}": {
+      "delete": {
+        "operationId": "delete_record",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "record_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Record Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete One Record"
+      },
       "get": {
         "operationId": "get_record",
         "parameters": [

@@ -19,6 +19,18 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def delete_record(session: Session, record_id: UUID) -> None:
+    """Deletes one record. Its revisions go with it via the ORM-level
+    cascade already configured on OCRRecord.revisions (cascade="all,
+    delete-orphan"), not a DB-level FK ondelete -- this works the same
+    under SQLite (tests) and Postgres. Irreversible; the caller (the API
+    route) is the one place a confirmation should already have happened.
+    """
+    record = get_record_or_raise(session, record_id)
+    session.delete(record)
+    session.commit()
+
+
 def apply_correction(
     session: Session,
     record_id: UUID,
@@ -158,5 +170,6 @@ __all__ = [
     "approve_record",
     "apply_correction",
     "bulk_approve_records",
+    "delete_record",
     "reject_record",
 ]

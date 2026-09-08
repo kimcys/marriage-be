@@ -13,12 +13,14 @@ from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.repositories import create_job
 from marriage_ocr_api.jobs.status import JobStatus
 from marriage_ocr_api.records.importer import import_records_from_xlsx
-from marriage_ocr_api.records.repositories import create_record
+from marriage_ocr_api.records.models import RecordRevision
+from marriage_ocr_api.records.repositories import RecordNotFoundError, create_record, get_record
 from marriage_ocr_api.records.service import (
     RecordConflictError,
     apply_correction,
     approve_record,
     bulk_approve_records,
+    delete_record,
     reject_record,
 )
 from marriage_ocr_api.records.status import RecordStatus
@@ -100,6 +102,39 @@ def test_apply_correction_rejects_stale_version(session: Session) -> None:
             reviewer="reviewer@example.com",
             note="corrected surname",
         )
+
+
+def test_delete_record_removes_it_and_its_revisions(session: Session) -> None:
+    job_id = _job(session)
+    record = create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-1",
+        field_values={"full_name": "Ada Lovelace"},
+        confidence=0.97,
+        validation_issues=[],
+    )
+    session.commit()
+    apply_correction(
+        session,
+        record.id,
+        expected_version=1,
+        field_values={"full_name": "Ada Byron"},
+        reviewer="reviewer@example.com",
+        note="corrected surname",
+    )
+    session.commit()
+    assert session.query(RecordRevision).filter_by(record_id=record.id).count() == 1
+
+    delete_record(session, record.id)
+
+    assert get_record(session, record.id) is None
+    assert session.query(RecordRevision).filter_by(record_id=record.id).count() == 0
+
+
+def test_delete_record_raises_for_missing_record(session: Session) -> None:
+    with pytest.raises(RecordNotFoundError):
+        delete_record(session, UUID("00000000-0000-0000-0000-000000000000"))
 
 
 def test_approve_and_reject_records(session: Session) -> None:
