@@ -118,6 +118,64 @@ def _seed_records(session: Session) -> tuple[UUID, UUID, UUID]:
     return first.id, second.id, third.id
 
 
+def test_record_responses_include_the_source_document_filename(client: TestClient, session: Session) -> None:
+    job_id = UUID("123e4567-e89b-12d3-a456-426614175800")
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    document = create_document(
+        session,
+        batch_id=batch.id,
+        original_filename="01470625105782052009.pdf",
+        safe_filename="source.pdf",
+        media_type="application/pdf",
+        size_bytes=1,
+        sha256="0" * 64,
+        storage_key=f"batches/{batch.id}/documents/doc/input/source.pdf",
+    )
+    create_job(
+        session,
+        id=job_id,
+        batch_id=batch.id,
+        document_id=document.id,
+        status=JobStatus.COMPLETED,
+        original_filename=document.original_filename,
+        stored_filename="source.pdf",
+        content_type="application/pdf",
+        file_size_bytes=1,
+        input_relative_path="jobs/1/input/source.pdf",
+        output_relative_path="jobs/1/output/result.xlsx",
+        debug_relative_path="jobs/1/debug",
+        stdout_log_relative_path="jobs/1/logs/stdout.log",
+        stderr_log_relative_path="jobs/1/logs/stderr.log",
+        ocr_git_ref="abc123",
+    )
+    record = create_record(
+        session,
+        job_id=job_id,
+        batch_id=batch.id,
+        document_id=document.id,
+        source_key="page-1-row-1",
+        field_values={"full_name": "Ada Lovelace"},
+        confidence=0.97,
+        validation_issues=[],
+    )
+    session.commit()
+
+    detail = client.get(f"/api/v1/records/{record.id}")
+    assert detail.status_code == 200
+    assert detail.json()["original_filename"] == "01470625105782052009.pdf"
+
+    listed = client.get("/api/v1/records", params={"batch_id": str(batch.id)})
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["original_filename"] == "01470625105782052009.pdf"
+
+    patched = client.patch(
+        f"/api/v1/records/{record.id}",
+        json={"version": 1, "field_values": {"full_name": "Ada Byron"}, "note": "correction"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["original_filename"] == "01470625105782052009.pdf"
+
+
 def test_record_routes_support_review_workflow(client: TestClient, session: Session) -> None:
     first_id, second_id, third_id = _seed_records(session)
 

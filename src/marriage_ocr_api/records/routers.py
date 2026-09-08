@@ -17,6 +17,8 @@ from marriage_ocr_api.records.repositories import (
     RecordConflictError,
     RecordNotFoundError,
     count_records,
+    get_document_filename,
+    get_document_filenames,
     get_record_or_raise,
     list_records,
     list_revisions,
@@ -77,7 +79,8 @@ def list_all_records(
     total = count_records(
         session, job_id=None, batch_id=batch_id, status=status, q=q, source_url=source_url, record_type=record_type
     )
-    return build_records_page(items, limit, offset, total)
+    filenames = get_document_filenames(session, {item.document_id for item in items if item.document_id})
+    return build_records_page(items, limit, offset, total, filenames=filenames)
 
 
 @router.get(
@@ -95,7 +98,8 @@ def list_job_records(
 ) -> PaginatedRecords:
     items = list_records(session, job_id=job_id, batch_id=None, status=status, q=q, limit=limit, offset=offset)
     total = count_records(session, job_id=job_id, batch_id=None, status=status, q=q)
-    return build_records_page(items, limit, offset, total)
+    filenames = get_document_filenames(session, {item.document_id for item in items if item.document_id})
+    return build_records_page(items, limit, offset, total, filenames=filenames)
 
 
 @router.get("/api/v1/records/{record_id}", response_model=RecordResponse, operation_id="get_record")
@@ -104,7 +108,7 @@ def get_record(record_id: UUID, session: Session = Depends(get_db_session)) -> R
         record = get_record_or_raise(session, record_id)
     except RecordNotFoundError as exc:
         raise _not_found("OCR record not found.") from exc
-    return build_record_response(record)
+    return build_record_response(record, original_filename=get_document_filename(session, record.document_id))
 
 
 @router.delete("/api/v1/records/{record_id}", status_code=204, operation_id="delete_record")
@@ -178,7 +182,7 @@ def patch_record(
         raise _not_found("OCR record not found.") from exc
     except RecordConflictError as exc:
         raise _conflict(str(exc)) from exc
-    return build_record_response(record)
+    return build_record_response(record, original_filename=get_document_filename(session, record.document_id))
 
 
 @router.post(
@@ -204,7 +208,7 @@ def approve_one_record(
         raise _not_found("OCR record not found.") from exc
     except RecordConflictError as exc:
         raise _conflict(str(exc)) from exc
-    return build_record_response(record)
+    return build_record_response(record, original_filename=get_document_filename(session, record.document_id))
 
 
 @router.post(
@@ -230,7 +234,7 @@ def reject_one_record(
         raise _not_found("OCR record not found.") from exc
     except RecordConflictError as exc:
         raise _conflict(str(exc)) from exc
-    return build_record_response(record)
+    return build_record_response(record, original_filename=get_document_filename(session, record.document_id))
 
 
 @router.post(
@@ -249,4 +253,5 @@ def bulk_approve(
         raise _not_found("OCR record not found.") from exc
     except RecordConflictError as exc:
         raise _conflict(str(exc)) from exc
-    return build_bulk_approve_response(items)
+    filenames = get_document_filenames(session, {item.document_id for item in items if item.document_id})
+    return build_bulk_approve_response(items, filenames=filenames)

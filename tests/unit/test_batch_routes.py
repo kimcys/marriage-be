@@ -165,3 +165,58 @@ def test_delete_missing_batch_returns_404(client: TestClient) -> None:
     missing_id = "00000000-0000-0000-0000-000000000000"
     response = client.delete(f"/api/v1/batches/{missing_id}")
     assert response.status_code == 404
+
+
+def test_download_document_serves_the_original_source_file(
+    client: TestClient, session: Session, tmp_path: Path
+) -> None:
+    batch_id = UUID(client.post("/api/v1/batches", json={"name": "Batch 1"}).json()["id"])
+    document = create_document(
+        session,
+        batch_id=batch_id,
+        original_filename="register.pdf",
+        safe_filename="register.pdf",
+        media_type="application/pdf",
+        size_bytes=3,
+        sha256="0" * 64,
+        storage_key=f"batches/{batch_id}/documents/doc/input/register.pdf",
+    )
+    session.commit()
+    source_file = tmp_path / "batches" / str(batch_id) / "documents" / "doc" / "input" / "register.pdf"
+    source_file.parent.mkdir(parents=True, exist_ok=True)
+    source_file.write_bytes(b"pdf")
+
+    response = client.get(f"/api/v1/batches/{batch_id}/documents/{document.id}/download")
+
+    assert response.status_code == 200
+    assert response.content == b"pdf"
+    assert response.headers["content-type"] == "application/pdf"
+
+
+def test_download_document_for_missing_document_returns_404(client: TestClient) -> None:
+    batch_id = UUID(client.post("/api/v1/batches", json={"name": "Batch 1"}).json()["id"])
+    missing_document_id = "00000000-0000-0000-0000-000000000000"
+
+    response = client.get(f"/api/v1/batches/{batch_id}/documents/{missing_document_id}/download")
+
+    assert response.status_code == 404
+
+
+def test_download_document_scoped_to_the_wrong_batch_returns_404(client: TestClient, session: Session) -> None:
+    batch_id = UUID(client.post("/api/v1/batches", json={"name": "Batch 1"}).json()["id"])
+    other_batch_id = UUID(client.post("/api/v1/batches", json={"name": "Batch 2"}).json()["id"])
+    document = create_document(
+        session,
+        batch_id=batch_id,
+        original_filename="register.pdf",
+        safe_filename="register.pdf",
+        media_type="application/pdf",
+        size_bytes=3,
+        sha256="0" * 64,
+        storage_key=f"batches/{batch_id}/documents/doc/input/register.pdf",
+    )
+    session.commit()
+
+    response = client.get(f"/api/v1/batches/{other_batch_id}/documents/{document.id}/download")
+
+    assert response.status_code == 404

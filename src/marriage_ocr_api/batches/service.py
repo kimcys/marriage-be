@@ -2,16 +2,49 @@ from __future__ import annotations
 
 import contextlib
 import shutil
+from pathlib import Path
 from uuid import UUID
 
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.models import Document, Export
 from marriage_ocr_api.batches.repositories import delete_batch_row
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.models import OCRJob
 from marriage_ocr_api.storage.factory import get_storage_service
+
+
+def _resolve_storage_path(storage_root: Path, relative_path: str) -> Path:
+    resolved_root = storage_root.resolve()
+    resolved = (resolved_root / relative_path).resolve()
+    if not resolved.is_relative_to(resolved_root):
+        raise ApiError(500, "INTERNAL_ERROR", "Invalid stored path.")
+    return resolved
+
+
+def build_document_download_response(document: Document, settings: Settings) -> FileResponse | RedirectResponse:
+    """Serves a document's original source file (the PDF/image that was
+    OCR'd) -- lets a reviewer open the actual scanned page a record's
+    extracted values came from, same STORAGE_BACKEND=s3 awareness as
+    jobs/service.py::build_job_download_response.
+    """
+    storage = get_storage_service(settings)
+    signed_url = storage.signed_download_url(document.storage_key, expires_seconds=300)
+    if signed_url is not None:
+        return RedirectResponse(signed_url)
+
+    input_path = _resolve_storage_path(settings.storage_root, document.storage_key)
+    if not input_path.exists() or not input_path.is_file():
+        raise ApiError(410, "SOURCE_FILE_MISSING", "The original source file is missing.")
+    return FileResponse(
+        path=input_path,
+        media_type=document.media_type,
+        filename=document.original_filename,
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
 
 
 def delete_batch(session: Session, settings: Settings, batch_id: UUID) -> None:

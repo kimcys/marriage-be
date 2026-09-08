@@ -185,6 +185,23 @@ def get_record_or_raise(session: Session, record_id: UUID) -> OCRRecord:
     return record
 
 
+def get_document_filename(session: Session, document_id: UUID | None) -> str | None:
+    """Single-record lookup for the source document's original filename --
+    used by every record-mutation endpoint response (PATCH/approve/reject),
+    which each only ever have one record in scope."""
+    if document_id is None:
+        return None
+    return session.scalar(select(Document.original_filename).where(Document.id == document_id))
+
+
+def get_document_filenames(session: Session, document_ids: set[UUID]) -> dict[UUID, str]:
+    """Bulk lookup for list endpoints, to avoid one query per record."""
+    if not document_ids:
+        return {}
+    rows = session.execute(select(Document.id, Document.original_filename).where(Document.id.in_(document_ids)))
+    return {row[0]: row[1] for row in rows}
+
+
 def _apply_record_filters[T: Select[Any]](
     stmt: T,
     *,

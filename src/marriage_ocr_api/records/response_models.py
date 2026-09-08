@@ -34,6 +34,12 @@ class RecordResponse(BaseModel):
     confidence: float | None
     validation_issues: list[str]
     missing_fields: list[str]
+    # The source document's original filename -- lets a reviewer open the
+    # actual scanned file a record's values came from (see
+    # GET /api/v1/batches/{batch_id}/documents/{document_id}/download).
+    # Resolved via a join in records/api.py, not a column on OCRRecord
+    # itself, so it defaults to None wherever that join wasn't done.
+    original_filename: str | None = None
     reviewed_by: str | None
     reviewed_at: datetime | None
     version: int

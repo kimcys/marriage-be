@@ -3,13 +3,14 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.api.dependencies import get_db_session, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.batches.repositories import count_batches, create_batch, get_batch, list_batches
+from marriage_ocr_api.batches.repositories import count_batches, create_batch, get_batch, get_document, list_batches
 from marriage_ocr_api.batches.response_models import BatchCreateRequest, BatchResponse, PaginatedBatches
-from marriage_ocr_api.batches.service import delete_batch
+from marriage_ocr_api.batches.service import build_document_download_response, delete_batch
 from marriage_ocr_api.core.config import Settings
 
 router = APIRouter(prefix="/api/v1/batches", tags=["batches"])
@@ -80,3 +81,16 @@ def delete_one_batch(
         raise _batch_not_found(batch_id)
     delete_batch(session, settings, batch_id)
     return Response(status_code=204)
+
+
+@router.get("/{batch_id}/documents/{document_id}/download", response_model=None, operation_id="download_document")
+def download_one_document(
+    batch_id: UUID,
+    document_id: UUID,
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(settings_dependency),
+) -> FileResponse | RedirectResponse:
+    document = get_document(session, document_id)
+    if document is None or document.batch_id != batch_id:
+        raise ApiError(404, "DOCUMENT_NOT_FOUND", f"Document {document_id} not found in this batch.")
+    return build_document_download_response(document, settings)
