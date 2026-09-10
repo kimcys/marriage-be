@@ -1602,6 +1602,53 @@
         ]
       }
     },
+    "/api/v1/batches/{batch_id}/onedrive-links/{submission_id}": {
+      "delete": {
+        "description": "Deletes one OneDrive link and everything it caused to be ingested --\nits documents, their OCR jobs, and any records those jobs produced.\nThe batch itself, and anything ingested by its other links, are left\nalone.",
+        "operationId": "delete_onedrive_link",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Submission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Onedrive Link",
+        "tags": [
+          "onedrive"
+        ]
+      }
+    },
     "/api/v1/batches/{batch_id}/onedrive-links/{submission_id}/retry": {
       "post": {
         "operationId": "retry_onedrive_link",

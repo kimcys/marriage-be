@@ -3,11 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, delete, func, select
 from sqlalchemy.orm import Session
 
+from marriage_ocr_api.batches.models import Document
+from marriage_ocr_api.db.models import OCRJob
 from marriage_ocr_api.onedrive.models import OneDriveSubmission
 from marriage_ocr_api.onedrive.status import OneDriveSubmissionStatus
+from marriage_ocr_api.records.models import OCRRecord, RecordRevision
 
 
 def utcnow() -> datetime:
@@ -111,6 +114,26 @@ def mark_pending_for_retry(session: Session, submission_id: UUID) -> OneDriveSub
     submission.updated_at = utcnow()
     session.flush()
     return submission
+
+
+def delete_submission_row(session: Session, submission_id: UUID) -> None:
+    """Explicit, application-level cascade -- mirrors
+    batches/repositories.py::delete_batch_row. `Document.onedrive_submission_id`
+    is ON DELETE SET NULL (a document normally survives its origin link
+    disappearing), but deleting the submission itself should take every
+    document/job/record it produced with it rather than leaving them
+    behind pointing at nothing -- and, same as delete_batch_row, this can't
+    rely on the DB enforcing that FK at all (SQLite, used by this test
+    suite, doesn't by default).
+    """
+    document_ids = select(Document.id).where(Document.onedrive_submission_id == submission_id)
+    job_ids = select(OCRJob.id).where(OCRJob.document_id.in_(document_ids))
+    record_ids = select(OCRRecord.id).where(OCRRecord.job_id.in_(job_ids))
+    session.execute(delete(RecordRevision).where(RecordRevision.record_id.in_(record_ids)))
+    session.execute(delete(OCRRecord).where(OCRRecord.job_id.in_(job_ids)))
+    session.execute(delete(OCRJob).where(OCRJob.document_id.in_(document_ids)))
+    session.execute(delete(Document).where(Document.onedrive_submission_id == submission_id))
+    session.execute(delete(OneDriveSubmission).where(OneDriveSubmission.id == submission_id))
 
 
 def fail_stale_fetching_submissions(

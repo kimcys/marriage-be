@@ -19,6 +19,7 @@ from marriage_ocr_api.onedrive.repositories import create_submission, get_submis
 from marriage_ocr_api.onedrive.runner import Classification, OneDriveFetchError
 from marriage_ocr_api.onedrive.service import (
     _ingest_one_file,
+    delete_submission,
     recover_stale_submissions,
     retry_submission,
     run_onedrive_fetch,
@@ -373,4 +374,73 @@ def test_retry_submission_marks_failed_again_when_resubmission_itself_fails() ->
     updated = get_submission(session, submission.id)
     assert updated.status == OneDriveSubmissionStatus.FAILED.value
     assert updated.error_code == "INTERNAL_PROCESSING_ERROR"
+    session.close()
+
+
+def _classification(record_type: str = "nikah") -> Classification:
+    return Classification(
+        doc_type="handwritten",
+        record_type=record_type,
+        layout_variant="legacy",
+        status="ROUTABLE",
+        config_path="config/handwritten.yaml",
+    )
+
+
+def test_delete_submission_removes_only_its_own_documents_jobs_and_files(tmp_path: Path) -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission_a = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!delete-a")
+    submission_b = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!keep-b")
+    session.commit()
+    session.close()
+
+    settings = Settings(storage_root=tmp_path)
+    run_onedrive_fetch(
+        submission_a.id,
+        settings,
+        session_factory,
+        FakeJobExecutor(),
+        FakeFetchRunner(files={"a.pdf": _FAKE_PDF_BYTES}, classifications={"a.pdf": _classification()}),
+    )
+    run_onedrive_fetch(
+        submission_b.id,
+        settings,
+        session_factory,
+        FakeJobExecutor(),
+        FakeFetchRunner(files={"b.pdf": _FAKE_PDF_BYTES}, classifications={"b.pdf": _classification()}),
+    )
+
+    session = session_factory()
+    all_documents = list_documents(session, batch.id, limit=10, offset=0)
+    doc_a = next(d for d in all_documents if d.onedrive_submission_id == submission_a.id)
+    doc_b = next(d for d in all_documents if d.onedrive_submission_id == submission_b.id)
+    doc_a_dir = tmp_path / "batches" / str(batch.id) / "documents" / str(doc_a.id)
+    doc_b_dir = tmp_path / "batches" / str(batch.id) / "documents" / str(doc_b.id)
+    assert doc_a_dir.exists()
+    assert doc_b_dir.exists()
+
+    delete_submission(session, settings, submission_a.id)
+    session.commit()
+
+    assert get_submission(session, submission_a.id) is None
+    assert get_submission(session, submission_b.id) is not None
+    remaining_documents = list_documents(session, batch.id, limit=10, offset=0)
+    assert [d.id for d in remaining_documents] == [doc_b.id]
+    remaining_jobs = list_jobs(session, None, limit=10, offset=0, document_id=doc_a.id)
+    assert remaining_jobs == []
+    assert not doc_a_dir.exists()
+    assert doc_b_dir.exists()
+    session.close()
+
+
+def test_delete_submission_for_missing_submission_raises(tmp_path: Path) -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+
+    with pytest.raises(ApiError):
+        delete_submission(session, Settings(storage_root=tmp_path), UUID("00000000-0000-0000-0000-000000000000"))
     session.close()

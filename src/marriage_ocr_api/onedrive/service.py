@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import shutil
@@ -8,15 +9,18 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.document_ingest import create_document_page_jobs, document_paths, split_page_count
+from marriage_ocr_api.batches.models import Document
 from marriage_ocr_api.batches.repositories import create_document, recompute_batch_status, recompute_document_status
 from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db import repositories as job_repositories
+from marriage_ocr_api.db.models import OCRJob
 from marriage_ocr_api.jobs.runner import sanitize_stderr_text
 from marriage_ocr_api.jobs.service import JobExecutorProtocol
 from marriage_ocr_api.jobs.status import JobStatus
@@ -378,3 +382,60 @@ def retry_submission(session: Session, submission_id: UUID, executor: OneDriveEx
         session.commit()
         raise ApiError(500, "INTERNAL_ERROR", "Failed to resubmit OneDrive submission.") from exc
     return submission
+
+
+def delete_submission(session: Session, settings: Settings, submission_id: UUID) -> None:
+    """Deletes a OneDrive submission and everything it caused to be
+    ingested -- its documents, their OCR jobs, and any records (+
+    revisions) those jobs produced -- plus their stored files. The batch
+    itself, and anything ingested by its *other* submissions, are
+    untouched. Irreversible; the caller (the API route) is the one place a
+    confirmation should already have happened. Mirrors
+    batches/service.py::delete_batch, scoped to one submission instead of
+    a whole batch.
+    """
+    submission = repositories.get_submission(session, submission_id)
+    if submission is None:
+        raise ApiError(404, "SUBMISSION_NOT_FOUND", f"OneDrive submission {submission_id} not found.")
+    batch_id = submission.batch_id
+
+    documents = list(
+        session.execute(
+            select(Document.id, Document.batch_id, Document.storage_key).where(
+                Document.onedrive_submission_id == submission_id
+            )
+        )
+    )
+    document_ids = [row.id for row in documents]
+    job_rows = (
+        list(
+            session.execute(
+                select(OCRJob.id, OCRJob.output_relative_path).where(OCRJob.document_id.in_(document_ids))
+            )
+        )
+        if document_ids
+        else []
+    )
+    job_output_keys = [row.output_relative_path for row in job_rows if row.output_relative_path]
+
+    repositories.delete_submission_row(session, submission_id)
+    recompute_batch_status(session, batch_id)
+    session.commit()
+
+    if settings.storage_backend == "s3":
+        storage = get_storage_service(settings)
+        for key in (*(row.storage_key for row in documents), *job_output_keys):
+            with contextlib.suppress(FileNotFoundError):
+                storage.delete(key)
+
+    # Local disk cleanup always runs, even under STORAGE_BACKEND=s3 -- debug
+    # artifacts and log files are never pushed to S3, so they only ever
+    # exist on local disk (same reasoning as delete_batch).
+    storage_root = settings.storage_root.resolve()
+    for row in documents:
+        shutil.rmtree(storage_root / "batches" / str(row.batch_id) / "documents" / str(row.id), ignore_errors=True)
+    # A split multi-page document's per-page jobs live under their own
+    # storage_root/jobs/{job_id}/ tree, entirely separate from the
+    # document's own directory above -- see batches/document_ingest.py.
+    for row in job_rows:
+        shutil.rmtree(storage_root / "jobs" / str(row.id), ignore_errors=True)

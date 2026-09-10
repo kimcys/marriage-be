@@ -11,7 +11,7 @@ x-ocr-common-env: &ocr-common-env
   OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-3600}
   OCR_STDERR_API_LIMIT: ${OCR_STDERR_API_LIMIT:-1000}
   MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
-  MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-b1d2df04b8e1d5a466da2851e7abe0b3ae3c70fc}
+  MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-5d478933b1d7ddae73ee436f88ceeca0c86c5921}
   GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-vision.json
   GEMINI_API_KEY: ${GEMINI_API_KEY:-}
   STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
@@ -67,7 +67,7 @@ services:
       context: .
       args:
         MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
-        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-b1d2df04b8e1d5a466da2851e7abe0b3ae3c70fc}
+        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-5d478933b1d7ddae73ee436f88ceeca0c86c5921}
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,7 +96,7 @@ services:
       context: .
       args:
         MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
-        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-b1d2df04b8e1d5a466da2851e7abe0b3ae3c70fc}
+        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-5d478933b1d7ddae73ee436f88ceeca0c86c5921}
     depends_on:
       postgres:
         condition: service_healthy
@@ -117,7 +117,7 @@ services:
       context: .
       args:
         MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
-        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-b1d2df04b8e1d5a466da2851e7abe0b3ae3c70fc}
+        MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-5d478933b1d7ddae73ee436f88ceeca0c86c5921}
     depends_on:
       postgres:
         condition: service_healthy

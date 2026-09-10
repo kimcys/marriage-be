@@ -119,6 +119,24 @@ def test_submit_duplicate_url_from_a_different_batch_still_returns_original(clie
     assert second.json()["batch_id"] == batch_id
 
 
+def test_submit_duplicate_url_resumes_a_failed_submission(client: TestClient, engine) -> None:
+    batch_id = _create_batch(client)
+
+    first = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!resume"})
+    submission_id = first.json()["id"]
+    _fail_submission(engine, submission_id)
+
+    second = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!resume"})
+
+    assert second.status_code == 202
+    payload = second.json()
+    assert payload["id"] == submission_id
+    assert payload["status"] == "PENDING"
+    assert payload["error"] is None
+    executor: FakeOneDriveExecutor = client.app.state.onedrive_executor
+    assert [str(job_id) for job_id in executor.submitted] == [submission_id, submission_id]
+
+
 def test_submit_onedrive_link_for_missing_batch_returns_404(client: TestClient) -> None:
     missing_batch_id = "00000000-0000-0000-0000-000000000000"
     response = client.post(f"/api/v1/batches/{missing_batch_id}/onedrive-links", json={"url": "https://1drv.ms/x"})
@@ -207,5 +225,37 @@ def test_retry_onedrive_link_scoped_to_the_wrong_batch_returns_404(client: TestC
     submission_id = created.json()["id"]
 
     response = client.post(f"/api/v1/batches/{other_batch_id}/onedrive-links/{submission_id}/retry")
+
+    assert response.status_code == 404
+
+
+def test_delete_onedrive_link_removes_it_from_the_list(client: TestClient) -> None:
+    batch_id = _create_batch(client)
+    created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!delete"})
+    submission_id = created.json()["id"]
+
+    response = client.delete(f"/api/v1/batches/{batch_id}/onedrive-links/{submission_id}")
+
+    assert response.status_code == 204
+    listing = client.get(f"/api/v1/batches/{batch_id}/onedrive-links")
+    assert listing.json()["total"] == 0
+
+
+def test_delete_onedrive_link_for_missing_submission_returns_404(client: TestClient) -> None:
+    batch_id = _create_batch(client)
+    missing_submission_id = "00000000-0000-0000-0000-000000000000"
+
+    response = client.delete(f"/api/v1/batches/{batch_id}/onedrive-links/{missing_submission_id}")
+
+    assert response.status_code == 404
+
+
+def test_delete_onedrive_link_scoped_to_the_wrong_batch_returns_404(client: TestClient) -> None:
+    batch_id = _create_batch(client)
+    other_batch_id = _create_batch(client)
+    created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!wrongbatch"})
+    submission_id = created.json()["id"]
+
+    response = client.delete(f"/api/v1/batches/{other_batch_id}/onedrive-links/{submission_id}")
 
     assert response.status_code == 404

@@ -3,13 +3,14 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from marriage_ocr_api.api.dependencies import get_db_session, get_onedrive_executor
+from marriage_ocr_api.api.dependencies import get_db_session, get_onedrive_executor, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.repositories import get_batch
+from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.onedrive import repositories
 from marriage_ocr_api.onedrive.response_models import (
     OneDriveSubmissionResponse,
@@ -19,9 +20,11 @@ from marriage_ocr_api.onedrive.schemas import OneDriveLinkCreateRequest
 from marriage_ocr_api.onedrive.service import (
     OneDriveExecutorProtocol,
     build_submission_response,
+    delete_submission,
     get_or_create_submission,
     retry_submission,
 )
+from marriage_ocr_api.onedrive.status import OneDriveSubmissionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +65,21 @@ def submit_onedrive_link(
         raise _batch_not_found(batch_id)
 
     submission, created = get_or_create_submission(session, batch_id=batch_id, url=payload.url)
-    response = build_submission_response(submission)
 
     if not created:
+        # Resubmitting a link that previously failed is the only way a
+        # plain paste-and-submit can recover it -- otherwise a user has to
+        # know the separate "Retry" action exists at all. A duplicate of
+        # anything still in-flight or already fetched is left alone, same
+        # as before (see get_or_create_submission's docstring).
+        if submission.status == OneDriveSubmissionStatus.FAILED.value:
+            submission = retry_submission(session, submission.id, executor)
+            response = build_submission_response(submission)
+            return JSONResponse(status_code=202, content=response.model_dump(mode="json"))
+        response = build_submission_response(submission)
         return JSONResponse(status_code=200, content=response.model_dump(mode="json"))
 
+    response = build_submission_response(submission)
     try:
         executor.submit(submission.id)
     except Exception as exc:
@@ -128,3 +141,30 @@ def retry_onedrive_link(
 
     submission = retry_submission(session, submission_id, executor)
     return build_submission_response(submission)
+
+
+@router.delete(
+    "/{batch_id}/onedrive-links/{submission_id}",
+    status_code=204,
+    operation_id="delete_onedrive_link",
+)
+def delete_onedrive_link(
+    batch_id: UUID,
+    submission_id: UUID,
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(settings_dependency),
+) -> Response:
+    """Deletes one OneDrive link and everything it caused to be ingested --
+    its documents, their OCR jobs, and any records those jobs produced.
+    The batch itself, and anything ingested by its other links, are left
+    alone."""
+    batch = get_batch(session, batch_id)
+    if batch is None:
+        raise _batch_not_found(batch_id)
+
+    submission = repositories.get_submission(session, submission_id)
+    if submission is None or submission.batch_id != batch_id:
+        raise ApiError(404, "SUBMISSION_NOT_FOUND", f"OneDrive submission {submission_id} not found in this batch.")
+
+    delete_submission(session, settings, submission_id)
+    return Response(status_code=204)
