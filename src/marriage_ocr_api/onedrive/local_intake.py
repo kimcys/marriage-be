@@ -15,11 +15,25 @@ from marriage_ocr_api.storage.local import (
 
 
 def save_local_file(source_path: Path, paths: JobPaths, settings: Settings) -> StoredUpload:
-    """Validate and move a file that's already fully downloaded to local disk
+    """Validate and copy a file that's already fully downloaded to local disk
     (a OneDrive fetch result) into a Document's storage layout -- same
     extension/signature/size checks and StoredUpload result shape a direct
     file upload would get, just reading from a Path instead of a streamed
-    FastAPI UploadFile."""
+    FastAPI UploadFile.
+
+    Copies rather than moves `source_path` deliberately: the caller
+    (onedrive/service.py::_ingest_one_file) deletes this document's storage
+    directory if anything after this call fails (a DB error, a page-split
+    failure), and a submission retry only re-processes whatever files are
+    still sitting in the OneDrive download directory. Moving the source
+    here would make a failed (or crashed-mid-ingest) attempt permanently
+    unrecoverable -- gone from the download directory (moved out) with
+    nothing durably recorded for it yet -- and a retry would never find it
+    again. `_ingest_one_file` deletes this original itself, but only once
+    the Document/Job rows are actually committed -- see its docstring for
+    why that ordering (not simply never deleting it here) is what avoids
+    turning this into a duplicate-ingestion bug instead.
+    """
     extension = source_path.suffix.lower()
     if extension not in ALLOWED_EXTENSIONS_TO_CONTENT_TYPES:
         raise UploadValidationError(
@@ -54,7 +68,7 @@ def save_local_file(source_path: Path, paths: JobPaths, settings: Settings) -> S
         for chunk in iter(lambda: source_file.read(1024 * 1024), b""):
             digest.update(chunk)
 
-    shutil.move(str(source_path), final_path)
+    shutil.copy2(str(source_path), final_path)
 
     return StoredUpload(
         stored_filename=final_path.name,

@@ -52,9 +52,12 @@ def test_save_local_file_accepts_valid_signatures(
     stored_path = paths.with_extension(Path(result.stored_filename).suffix).input_source_path
     assert stored_path.exists()
     assert stored_path.read_bytes() == data
-    # The downloaded temp file is moved into the document's storage layout,
-    # not copied -- nothing should be left behind at the source path.
-    assert not source_path.exists()
+    # The downloaded file is copied into the document's storage layout,
+    # not moved -- the original is left in place at the source path so a
+    # submission retry can still find and re-ingest it if something after
+    # this call fails (see save_local_file's docstring).
+    assert source_path.exists()
+    assert source_path.read_bytes() == data
 
 
 def test_save_local_file_rejects_unsupported_extension(tmp_path: Path) -> None:

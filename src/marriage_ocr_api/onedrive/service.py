@@ -208,6 +208,29 @@ def _ingest_one_file(
         shutil.rmtree(paths.job_root, ignore_errors=True)
         raise
 
+    # Only remove the OneDrive-staged original now that the Document/Job
+    # rows are durably committed -- `save_local_file` copies rather than
+    # moves it precisely so it survives if this function had raised above.
+    # Doing the delete here (not there) means a crash between "committed"
+    # and "this line" is the only window where a retry could re-ingest an
+    # already-ingested file; leaving the copy around indefinitely (i.e.
+    # never deleting it here) would instead re-ingest -- and duplicate --
+    # every successfully-ingested file on every future retry, which is
+    # worse. Best-effort: a failure to remove it doesn't undo the ingest
+    # that already succeeded, just leaves a harmless leftover file that the
+    # submission's final cleanup (run_onedrive_fetch's shutil.rmtree of the
+    # whole download directory) will still catch once the submission
+    # completes normally.
+    try:
+        source_path.unlink()
+    except OSError:
+        logger.warning(
+            "Ingested %s successfully but could not remove its OneDrive-staged "
+            "original at %s",
+            original_filename,
+            source_path,
+        )
+
     submission_failures = 0
     for pending_job_id in job_ids:
         try:

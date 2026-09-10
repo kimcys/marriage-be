@@ -17,7 +17,12 @@ from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.repositories import list_jobs
 from marriage_ocr_api.onedrive.repositories import create_submission, get_submission, mark_failed, mark_fetching
 from marriage_ocr_api.onedrive.runner import Classification, OneDriveFetchError
-from marriage_ocr_api.onedrive.service import recover_stale_submissions, retry_submission, run_onedrive_fetch
+from marriage_ocr_api.onedrive.service import (
+    _ingest_one_file,
+    recover_stale_submissions,
+    retry_submission,
+    run_onedrive_fetch,
+)
 from marriage_ocr_api.onedrive.status import OneDriveSubmissionStatus
 
 _FAKE_PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n"
@@ -105,6 +110,77 @@ def test_run_onedrive_fetch_routes_a_routable_file_and_submits_its_job(tmp_path:
     assert len(job_executor.submitted) == 1
     assert job_executor.submitted[0] == jobs[0].id
     check_session.close()
+
+
+def test_ingest_one_file_success_removes_the_staged_source(tmp_path: Path) -> None:
+    """Once the Document/Job rows are durably committed, the OneDrive-staged
+    original is redundant -- and must be removed so a future submission
+    retry's re-scan of the download directory doesn't find it again and
+    ingest (duplicate) it a second time."""
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!ok")
+    session.commit()
+
+    source_path = tmp_path / "downloaded" / "page1.pdf"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(_FAKE_PDF_BYTES)
+
+    _ingest_one_file(
+        session,
+        Settings(storage_root=tmp_path),
+        FakeJobExecutor(),
+        batch_id=batch.id,
+        submission_id=submission.id,
+        source_path=source_path,
+        document_type=DocumentType.HANDWRITTEN_REGISTER,
+    )
+
+    assert not source_path.exists()
+    assert len(list_documents(session, batch.id, limit=10, offset=0)) == 1
+    session.close()
+
+
+def test_ingest_one_file_failure_preserves_the_staged_source_for_retry(tmp_path: Path, monkeypatch) -> None:
+    """A file that fails partway through ingestion (DB error, page-split
+    failure, etc.) must not be silently, permanently lost -- the original
+    OneDrive-staged copy has to survive so a submission retry can find and
+    re-attempt it. This is what local_intake.save_local_file copying
+    (rather than moving) the source, combined with _ingest_one_file only
+    deleting it after a successful commit, is meant to guarantee."""
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!flaky")
+    session.commit()
+
+    source_path = tmp_path / "downloaded" / "page1.pdf"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(_FAKE_PDF_BYTES)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated transient DB failure")
+
+    monkeypatch.setattr("marriage_ocr_api.onedrive.service.create_document", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated transient DB failure"):
+        _ingest_one_file(
+            session,
+            Settings(storage_root=tmp_path),
+            FakeJobExecutor(),
+            batch_id=batch.id,
+            submission_id=submission.id,
+            source_path=source_path,
+            document_type=DocumentType.HANDWRITTEN_REGISTER,
+        )
+
+    assert source_path.exists()
+    assert source_path.read_bytes() == _FAKE_PDF_BYTES
+    assert list_documents(session, batch.id, limit=10, offset=0) == []
+    session.close()
 
 
 def test_run_onedrive_fetch_skips_unroutable_files_without_creating_documents(tmp_path: Path) -> None:
