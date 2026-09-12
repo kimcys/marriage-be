@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session, sessionmaker
 
 from marriage_ocr_api.batches.repositories import recompute_batch_status, recompute_document_status
-from marriage_ocr_api.batches.status import DocumentType
+from marriage_ocr_api.batches.status import TYPED_DOCUMENT_TYPES, DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db import repositories
 from marriage_ocr_api.jobs.runner import (
@@ -89,7 +89,13 @@ def process_ocr_job(
             session.commit()
 
         document_type = DocumentType(job.document_type)
-        is_typed = document_type == DocumentType.TYPED_BORANG_4B
+        # Was `== DocumentType.TYPED_BORANG_4B` -- true for only one of six
+        # typed document types, so every TYPED_CERAI_*/TYPED_RUJUK_* (and now
+        # TYPED_NIKAH_LEGACY/MODERN) job silently got `.xlsx` output and the
+        # XLSX importer even though process-typed always writes CSV, which
+        # would fail import_records_from_xlsx outright (CSV content isn't a
+        # valid XLSX/zip file).
+        is_typed = document_type in TYPED_DOCUMENT_TYPES
 
         storage_root = settings.storage_root.resolve()
         input_path = storage_root / job.input_relative_path

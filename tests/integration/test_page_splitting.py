@@ -32,12 +32,16 @@ _NIKAH_CLASSIFICATION = Classification(
     status="ROUTABLE",
     config_path="config/handwritten.yaml",
 )
+# Typed Nikah now splits legacy/modern the same way Cerai/Rujuk already do
+# (marriage-ocr's `classify` never reports layout_variant=None for it any
+# more) -- see CLASSIFICATION_TO_DOCUMENT_TYPE, which no longer has a
+# ("typed", "nikah", None) entry.
 _BORANG_4B_CLASSIFICATION = Classification(
     doc_type="typed",
     record_type="nikah",
-    layout_variant=None,
+    layout_variant="modern",
     status="ROUTABLE",
-    config_path="config/typed_borang4b.yaml",
+    config_path="config/typed_nikah_modern.yaml",
 )
 
 

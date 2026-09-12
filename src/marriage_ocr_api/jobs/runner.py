@@ -21,6 +21,8 @@ _CLI_COMMAND_BY_DOCUMENT_TYPE = {
     DocumentType.HANDWRITTEN_RUJUK_LEGACY: "process",
     DocumentType.HANDWRITTEN_RUJUK_MODERN: "process",
     DocumentType.TYPED_BORANG_4B: "process-typed",
+    DocumentType.TYPED_NIKAH_LEGACY: "process-typed",
+    DocumentType.TYPED_NIKAH_MODERN: "process-typed",
     DocumentType.TYPED_CERAI_LEGACY: "process-typed",
     DocumentType.TYPED_CERAI_MODERN: "process-typed",
     DocumentType.TYPED_RUJUK_LEGACY: "process-typed",
@@ -32,12 +34,17 @@ _CLI_COMMAND_BY_DOCUMENT_TYPE = {
 # deliberately absent here -- they keep using the two dedicated
 # Settings.ocr_config_path_* fields below, unchanged from before this table
 # existed, so nothing that already depends on those two fields' exact values
-# changes behavior.
+# changes behavior. TYPED_NIKAH_LEGACY/MODERN are new (TYPED_BORANG_4B's
+# successor) and follow the Cerai/Rujuk pattern instead -- resolved via
+# ocr_config_dir like every other post-legacy/modern-split type, not a
+# dedicated Settings field.
 _CONFIG_FILENAME_BY_DOCUMENT_TYPE = {
     DocumentType.HANDWRITTEN_CERAI_LEGACY: "handwritten_cerai_legacy.yaml",
     DocumentType.HANDWRITTEN_CERAI_MODERN: "handwritten_cerai_modern.yaml",
     DocumentType.HANDWRITTEN_RUJUK_LEGACY: "handwritten_rujuk_legacy.yaml",
     DocumentType.HANDWRITTEN_RUJUK_MODERN: "handwritten_rujuk_modern.yaml",
+    DocumentType.TYPED_NIKAH_LEGACY: "typed_nikah_legacy.yaml",
+    DocumentType.TYPED_NIKAH_MODERN: "typed_nikah_modern.yaml",
     DocumentType.TYPED_CERAI_LEGACY: "typed_cerai_legacy.yaml",
     DocumentType.TYPED_CERAI_MODERN: "typed_cerai_modern.yaml",
     DocumentType.TYPED_RUJUK_LEGACY: "typed_rujuk_legacy.yaml",

@@ -140,13 +140,15 @@ def test_runner_uses_process_typed_command_and_config_for_typed_documents(
         (DocumentType.HANDWRITTEN_CERAI_MODERN, "process", "handwritten_cerai_modern.yaml"),
         (DocumentType.HANDWRITTEN_RUJUK_LEGACY, "process", "handwritten_rujuk_legacy.yaml"),
         (DocumentType.HANDWRITTEN_RUJUK_MODERN, "process", "handwritten_rujuk_modern.yaml"),
+        (DocumentType.TYPED_NIKAH_LEGACY, "process-typed", "typed_nikah_legacy.yaml"),
+        (DocumentType.TYPED_NIKAH_MODERN, "process-typed", "typed_nikah_modern.yaml"),
         (DocumentType.TYPED_CERAI_LEGACY, "process-typed", "typed_cerai_legacy.yaml"),
         (DocumentType.TYPED_CERAI_MODERN, "process-typed", "typed_cerai_modern.yaml"),
         (DocumentType.TYPED_RUJUK_LEGACY, "process-typed", "typed_rujuk_legacy.yaml"),
         (DocumentType.TYPED_RUJUK_MODERN, "process-typed", "typed_rujuk_modern.yaml"),
     ],
 )
-def test_runner_routes_cerai_and_rujuk_document_types_via_ocr_config_dir(
+def test_runner_routes_legacy_modern_document_types_via_ocr_config_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     document_type: DocumentType,
