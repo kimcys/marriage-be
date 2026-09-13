@@ -177,7 +177,7 @@ docker compose down -v
 
 The repository also includes mocked tests and health checks so CI and local development do not require real Google credentials.
 
-The Docker build and Compose defaults pin the upstream OCR checkout to `d4ff34a0415567a86106602f6cf3ecb464e04d4f`, which matches the current `origin/main` of `marriage-ocr`.
+The Docker build and Compose defaults pin the upstream OCR checkout to `3bfe0d6849bc5199dc8449238a21ba26adb39e92`, which matches the current `origin/main` of `marriage-ocr`.
 
 Frontend contract notes live in [`docs/frontend-integration.md`](docs/frontend-integration.md).
 
