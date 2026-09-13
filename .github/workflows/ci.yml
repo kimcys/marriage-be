@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   unit:
@@ -116,3 +117,102 @@ jobs:
         run: docker compose config
       - name: Docker smoke test
         run: pytest -q -m integration tests/integration/test_docker_e2e.py
+
+  # Builds the production image and rolls it out to every DigitalOcean
+  # Droplet tagged marriage-be-api / marriage-be-worker -- only after all
+  # three test jobs above pass, and only for a real push to main (never a
+  # pull request, and never a fork, since only main's own push event has
+  # access to the secrets below). Requires (all one-time setup, done
+  # outside this repo): a DigitalOcean Container Registry and Droplets
+  # tagged marriage-be-api/marriage-be-worker, an SSH key pair whose
+  # public half is on every Droplet and whose private half is the
+  # DEPLOY_SSH_KEY secret below, and the three repo secrets this job
+  # reads (DIGITALOCEAN_ACCESS_TOKEN, DIGITALOCEAN_REGISTRY_NAME,
+  # DEPLOY_SSH_KEY) plus a "production" environment (Settings ->
+  # Environments) to hold them.
+  deploy:
+    name: Deploy to DigitalOcean
+    runs-on: ubuntu-latest
+    needs: [unit, integration, docker-e2e]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    environment: production
+    env:
+      REGISTRY_IMAGE: registry.digitalocean.com/${{ secrets.DIGITALOCEAN_REGISTRY_NAME }}/marriage-be
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build image
+        run: |
+          docker build \
+            -t "${REGISTRY_IMAGE}:${{ github.sha }}" \
+            -t "${REGISTRY_IMAGE}:latest" \
+            .
+
+      - name: Push image
+        run: |
+          docker push "${REGISTRY_IMAGE}:${{ github.sha }}"
+          docker push "${REGISTRY_IMAGE}:latest"
+
+      # Droplets are discovered by tag, not hardcoded IPs -- add/remove a
+      # worker Droplet (see the guide's scaling section) and the very next
+      # deploy picks it up automatically, no workflow edit required.
+      - name: Look up API Droplet(s)
+        id: api
+        run: |
+          ips=$(doctl compute droplet list --tag-name marriage-be-api --format PublicIPv4 --no-header | paste -sd, -)
+          echo "ips=$ips" >> "$GITHUB_OUTPUT"
+
+      - name: Look up worker Droplet(s)
+        id: worker
+        run: |
+          ips=$(doctl compute droplet list --tag-name marriage-be-worker --format PublicIPv4 --no-header | paste -sd, -)
+          echo "ips=$ips" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy api + beat
+        if: steps.api.outputs.ips != ''
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ steps.api.outputs.ips }}
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/marriage-be
+            export IMAGE_TAG=${{ github.sha }}
+            docker compose -f docker-compose.production.yml --env-file .env.production pull api beat
+            docker compose -f docker-compose.production.yml --env-file .env.production up -d api beat
+            docker image prune -f
+
+      - name: Deploy worker(s)
+        if: steps.worker.outputs.ips != ''
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ steps.worker.outputs.ips }}
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/marriage-be
+            export IMAGE_TAG=${{ github.sha }}
+            docker compose -f docker-compose.production.yml --env-file .env.production pull worker
+            docker compose -f docker-compose.production.yml --env-file .env.production up -d worker
+            docker image prune -f
+
+      - name: Confirm the API is actually up
+        if: steps.api.outputs.ips != ''
+        run: |
+          ip=$(echo "${{ steps.api.outputs.ips }}" | cut -d, -f1)
+          for i in $(seq 1 10); do
+            if curl -fsS "http://${ip}:8000/health"; then exit 0; fi
+            sleep 3
+          done
+          echo "API did not report healthy after deploy" >&2
+          exit 1
