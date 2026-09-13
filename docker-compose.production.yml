@@ -15,7 +15,7 @@ x-ocr-common-env: &ocr-common-env
   OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-3600}
   OCR_STDERR_API_LIMIT: ${OCR_STDERR_API_LIMIT:-1000}
   MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
-  MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-210de13cf1cffbca2f0ffcf6c00757ba82ff8776}
+  MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-5fa36d2e5295c38c7e7c386cd2923a52f6c07e6f}
   GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-vision.json
   GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY}
   # Every Droplet (api and every worker) must point at the same bucket --
@@ -40,7 +40,7 @@ x-build: &build
   context: .
   args:
     MARRIAGE_OCR_GIT_URL: ${MARRIAGE_OCR_GIT_URL:-https://github.com/kimcys/marriage-ocr.git}
-    MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-210de13cf1cffbca2f0ffcf6c00757ba82ff8776}
+    MARRIAGE_OCR_GIT_REF: ${MARRIAGE_OCR_GIT_REF:-5fa36d2e5295c38c7e7c386cd2923a52f6c07e6f}
 
 # No postgres/valkey/minio services here on purpose -- this file is meant to
 # run on several Droplets (one running `api`, others running `worker`, and
