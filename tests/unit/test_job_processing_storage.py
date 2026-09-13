@@ -37,14 +37,18 @@ class FakeTypedSuccessRunner:
     """Stands in for a real `process-typed` CLI run -- always writes CSV
     content, regardless of what extension `request.output_path` happens to
     have (matching every real typed DocumentType, not just TYPED_BORANG_4B;
-    see the is_typed fix in jobs/processing.py)."""
+    see the is_typed fix in jobs/processing.py). Written with utf-8-sig
+    (BOM), matching marriage-ocr's own typed/csv_writer.py exactly -- a
+    plain "utf-8" fake here would never have caught the BOM-handling bug in
+    import_records_from_csv (it silently keyed the first column as
+    "﻿Bil" instead of "Bil")."""
 
     def run(self, request: OCRRunRequest) -> OCRRunResult:
         assert request.input_path.exists(), "input file must be materialized before the OCR run"
         request.output_path.parent.mkdir(parents=True, exist_ok=True)
         request.output_path.write_text(
             "Bil,Nama Suami,Source File,Processing Status\n1,AHMAD BIN ALI,test.pdf,SUCCESS\n",
-            encoding="utf-8",
+            encoding="utf-8-sig",
         )
         return OCRRunResult(return_code=0, timed_out=False, duration_seconds=0.01)
 
@@ -207,3 +211,7 @@ def test_process_ocr_job_uses_csv_output_and_importer_for_every_typed_document_t
         records = session.query(OCRRecord).filter_by(job_id=job_id).all()
         assert len(records) == 1
         assert records[0].field_values["Nama Suami"] == "AHMAD BIN ALI"
+        # Regression: the first column's key used to come back as "﻿Bil"
+        # (a stray BOM prefix) instead of "Bil" when the CSV writer's BOM
+        # (utf-8-sig) wasn't stripped on read.
+        assert records[0].field_values["Bil"] == "1"

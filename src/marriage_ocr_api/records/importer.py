@@ -173,7 +173,16 @@ def import_records_from_csv(
     importer and is expected to always be None here.
     """
     created = 0
-    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+    # utf-8-sig, not utf-8 -- marriage-ocr's typed csv_writer.py deliberately
+    # writes a UTF-8 BOM (for Excel/Malay-character compatibility). Reading
+    # it back as plain "utf-8" doesn't strip that BOM, so the first column's
+    # dict key silently becomes "﻿Bil" instead of "Bil" -- every typed
+    # record's Bil ends up under the wrong field_values key (present, just
+    # unreachable by its real name; the FE's dynamic column list still shows
+    # it under the mangled key, so this was invisible without deliberately
+    # inspecting field_values keys). utf-8-sig is safe even when no BOM is
+    # present, so this doesn't affect anything already working.
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         for row_index, record in enumerate(reader, start=1):
             if not any(value not in (None, "") for value in record.values()):
