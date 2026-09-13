@@ -34,9 +34,7 @@ def build_records_page(
     filenames = filenames or {}
     return PaginatedRecords(
         items=[
-            build_record_response(
-                item, original_filename=filenames.get(item.document_id) if item.document_id else None
-            )
+            build_record_response(item, original_filename=filenames.get(item.document_id) if item.document_id else None)
             for item in items
         ],
         limit=limit,
@@ -65,9 +63,7 @@ def build_bulk_approve_response(
     filenames = filenames or {}
     return BulkApproveResponse(
         items=[
-            build_record_response(
-                item, original_filename=filenames.get(item.document_id) if item.document_id else None
-            )
+            build_record_response(item, original_filename=filenames.get(item.document_id) if item.document_id else None)
             for item in items
         ]
     )

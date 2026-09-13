@@ -11,9 +11,7 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table("ocr_records") as batch_op:
-        batch_op.add_column(
-            sa.Column("missing_fields", sa.JSON(), nullable=False, server_default="[]")
-        )
+        batch_op.add_column(sa.Column("missing_fields", sa.JSON(), nullable=False, server_default="[]"))
 
 
 def downgrade() -> None:

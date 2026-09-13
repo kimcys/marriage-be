@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -167,10 +168,8 @@ def delete_export_artifact(session: Session, settings: Settings, export: Export)
     """
     if export.storage_key is not None:
         storage = get_storage_service(settings)
-        try:
+        with contextlib.suppress(FileNotFoundError):
             storage.delete(export.storage_key)
-        except FileNotFoundError:
-            pass
     delete_export_record(session, export)
     session.commit()
 

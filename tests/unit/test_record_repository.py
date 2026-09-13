@@ -253,10 +253,7 @@ def test_list_records_filters_by_onedrive_source_url(session: Session) -> None:
     )
     assert [record.id for record in matched] == [from_link.id]
     assert (
-        count_records(
-            session, job_id=None, batch_id=None, status=None, source_url="https://1drv.ms/f/s!from-link"
-        )
-        == 1
+        count_records(session, job_id=None, batch_id=None, status=None, source_url="https://1drv.ms/f/s!from-link") == 1
     )
 
     no_match = list_records(

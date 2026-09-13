@@ -110,9 +110,7 @@ def build_submission_response(submission: OneDriveSubmission) -> OneDriveSubmiss
             code=submission.error_code or "INTERNAL_ERROR",
             message=submission.error_message or "",
         )
-    skipped_files = (
-        [SkippedFile(**item) for item in submission.skipped_files] if submission.skipped_files else None
-    )
+    skipped_files = [SkippedFile(**item) for item in submission.skipped_files] if submission.skipped_files else None
     return OneDriveSubmissionResponse(
         id=submission.id,
         batch_id=submission.batch_id,
@@ -229,8 +227,7 @@ def _ingest_one_file(
         source_path.unlink()
     except OSError:
         logger.warning(
-            "Ingested %s successfully but could not remove its OneDrive-staged "
-            "original at %s",
+            "Ingested %s successfully but could not remove its OneDrive-staged original at %s",
             original_filename,
             source_path,
         )
@@ -409,9 +406,7 @@ def delete_submission(session: Session, settings: Settings, submission_id: UUID)
     document_ids = [row.id for row in documents]
     job_rows = (
         list(
-            session.execute(
-                select(OCRJob.id, OCRJob.output_relative_path).where(OCRJob.document_id.in_(document_ids))
-            )
+            session.execute(select(OCRJob.id, OCRJob.output_relative_path).where(OCRJob.document_id.in_(document_ids)))
         )
         if document_ids
         else []
@@ -437,5 +432,5 @@ def delete_submission(session: Session, settings: Settings, submission_id: UUID)
     # A split multi-page document's per-page jobs live under their own
     # storage_root/jobs/{job_id}/ tree, entirely separate from the
     # document's own directory above -- see batches/document_ingest.py.
-    for row in job_rows:
-        shutil.rmtree(storage_root / "jobs" / str(row.id), ignore_errors=True)
+    for job_row in job_rows:
+        shutil.rmtree(storage_root / "jobs" / str(job_row.id), ignore_errors=True)

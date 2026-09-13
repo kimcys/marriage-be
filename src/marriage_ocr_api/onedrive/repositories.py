@@ -26,9 +26,7 @@ def get_submission_by_url(session: Session, url: str) -> OneDriveSubmission | No
 
 
 def list_submissions(session: Session, *, batch_id: UUID, limit: int, offset: int) -> list[OneDriveSubmission]:
-    stmt: Select[tuple[OneDriveSubmission]] = select(OneDriveSubmission).where(
-        OneDriveSubmission.batch_id == batch_id
-    )
+    stmt: Select[tuple[OneDriveSubmission]] = select(OneDriveSubmission).where(OneDriveSubmission.batch_id == batch_id)
     stmt = stmt.order_by(OneDriveSubmission.created_at.desc(), OneDriveSubmission.id.desc())
     stmt = stmt.limit(limit).offset(offset)
     return list(session.scalars(stmt))

@@ -58,9 +58,7 @@ def list_all_records(
     status: RecordStatus | None = Query(default=None),
     q: str | None = Query(default=None, description="Free-text search over the record's extracted field values"),
     source_url: str | None = Query(default=None, description="Filter to records from this OneDrive share link"),
-    record_type: str | None = Query(
-        default=None, description="Filter to this record type (NIKAH, CERAI, or RUJUK)"
-    ),
+    record_type: str | None = Query(default=None, description="Filter to this record type (NIKAH, CERAI, or RUJUK)"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),

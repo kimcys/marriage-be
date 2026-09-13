@@ -111,9 +111,7 @@ def test_submit_duplicate_url_from_a_different_batch_still_returns_original(clie
     assert first.status_code == 202
     first_id = first.json()["id"]
 
-    second = client.post(
-        f"/api/v1/batches/{other_batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!shared"}
-    )
+    second = client.post(f"/api/v1/batches/{other_batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!shared"})
     assert second.status_code == 200
     assert second.json()["id"] == first_id
     assert second.json()["batch_id"] == batch_id
