@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     # filenames relative to this same directory.
     ocr_config_dir: Path = Path("/opt/marriage-ocr/config")
     ocr_timeout_seconds: int = 3600
+    # A OneDrive submission's Celery task covers a fetch (subprocess, itself
+    # bounded by ocr_timeout_seconds) plus one classify subprocess spawn per
+    # downloaded file plus ingest -- for a link with thousands of files this
+    # routinely runs far longer than a single OCR job, so it needs its own,
+    # much larger task-level time limit rather than inheriting
+    # ocr_timeout_seconds's global default (see jobs/celery_app.py's
+    # task_time_limit, sized for one OCR subprocess run).
+    onedrive_fetch_timeout_seconds: int = 21600
     ocr_max_concurrent_jobs: int = 1
     ocr_stderr_api_limit: int = 1000
     marriage_ocr_git_url: str = "https://github.com/kimcys/marriage-ocr.git"
@@ -110,6 +118,7 @@ class Settings(BaseSettings):
         "max_upload_bytes",
         "upload_chunk_bytes",
         "ocr_timeout_seconds",
+        "onedrive_fetch_timeout_seconds",
         "ocr_stderr_api_limit",
         "ocr_max_concurrent_jobs",
         mode="after",

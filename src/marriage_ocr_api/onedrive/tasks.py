@@ -10,8 +10,19 @@ from marriage_ocr_api.onedrive.service import recover_stale_submissions, run_one
 
 logger = logging.getLogger(__name__)
 
+_settings = get_settings()
 
-@celery_app.task(name="marriage_ocr_api.onedrive.fetch_submission", bind=False)
+
+@celery_app.task(
+    name="marriage_ocr_api.onedrive.fetch_submission",
+    bind=False,
+    # Overrides celery_app.py's global task_time_limit/task_soft_time_limit
+    # (sized for one OCR subprocess run) -- this task's own work is a fetch
+    # plus N per-file classify calls plus ingest, which for a
+    # several-thousand-file link can legitimately run far longer.
+    time_limit=_settings.onedrive_fetch_timeout_seconds + 60,
+    soft_time_limit=_settings.onedrive_fetch_timeout_seconds + 30,
+)
 def fetch_onedrive_submission(submission_id: str) -> None:
     # Imported lazily (not at module level): jobs.celery_executor -> jobs.tasks
     # -> jobs.celery_app -> (bottom-of-file) this module -- a module-level
@@ -37,9 +48,11 @@ def recover_stale_submissions_task() -> int:
     """
     settings = get_settings()
     session_factory = get_session_factory(settings)
-    # Extra margin over the OCR job threshold: a submission's run covers a
-    # fetch plus N per-file classify calls, not just one OCR run.
-    stale_after_seconds = settings.ocr_timeout_seconds + 900
+    # Must stay above the fetch task's own time_limit (see tasks.py's
+    # fetch_onedrive_submission) plus margin -- otherwise this would mark a
+    # submission stale (and eligible for the operator to retry) while a
+    # worker is still legitimately inside its allotted run.
+    stale_after_seconds = settings.onedrive_fetch_timeout_seconds + 900
     with session_factory() as session:
         recovered = recover_stale_submissions(session, stale_after_seconds)
         session.commit()
