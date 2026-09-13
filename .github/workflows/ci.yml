@@ -176,6 +176,11 @@ jobs:
           ips=$(doctl compute droplet list --tag-name marriage-be-worker --format PublicIPv4 --no-header | paste -sd, -)
           echo "ips=$ips" >> "$GITHUB_OUTPUT"
 
+      # `git pull` keeps each Droplet's docker-compose.production.yml in
+      # sync with this repo automatically -- .env.production lives in the
+      # same directory but is gitignored (never tracked, so `git pull`
+      # never touches it) and was put there once during that Droplet's
+      # initial setup.
       - name: Deploy api + beat
         if: steps.api.outputs.ips != ''
         uses: appleboy/ssh-action@v1.2.0
@@ -186,6 +191,7 @@ jobs:
           script: |
             set -e
             cd /opt/marriage-be
+            git pull --ff-only origin main
             export IMAGE_TAG=${{ github.sha }}
             docker compose -f docker-compose.production.yml --env-file .env.production pull api beat
             docker compose -f docker-compose.production.yml --env-file .env.production up -d api beat
@@ -201,6 +207,7 @@ jobs:
           script: |
             set -e
             cd /opt/marriage-be
+            git pull --ff-only origin main
             export IMAGE_TAG=${{ github.sha }}
             docker compose -f docker-compose.production.yml --env-file .env.production pull worker
             docker compose -f docker-compose.production.yml --env-file .env.production up -d worker
