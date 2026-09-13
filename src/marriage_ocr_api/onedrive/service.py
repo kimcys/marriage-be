@@ -29,7 +29,7 @@ from marriage_ocr_api.onedrive.classification import CLASSIFICATION_TO_DOCUMENT_
 from marriage_ocr_api.onedrive.local_intake import save_local_file
 from marriage_ocr_api.onedrive.models import OneDriveSubmission
 from marriage_ocr_api.onedrive.response_models import OneDriveSubmissionError, OneDriveSubmissionResponse, SkippedFile
-from marriage_ocr_api.onedrive.runner import ClassifyError, OneDriveFetchError, OneDriveFetchRunner
+from marriage_ocr_api.onedrive.runner import Classification, ClassifyError, OneDriveFetchError, OneDriveFetchRunner
 from marriage_ocr_api.onedrive.status import OneDriveSubmissionStatus
 from marriage_ocr_api.storage.factory import get_storage_service
 from marriage_ocr_api.storage.local import UploadValidationError
@@ -252,6 +252,63 @@ def _ingest_one_file(
     return document_id
 
 
+def _apply_neighbor_fallback(
+    classified: list[tuple[Path, Classification]],
+) -> list[tuple[Path, Classification]]:
+    """A bound ledger book photographed page-by-page keeps one record_type/
+    layout_variant throughout, but its title (what triage.py's classifier
+    keys off) doesn't necessarily appear on every single page -- a
+    continuation page deep in the same book, or one whose title band the
+    photo simply didn't capture, comes back as doc_type="unknown"
+    (NEEDS_MANUAL_CLASSIFICATION) even though a human looking at the whole
+    batch in filename order would immediately recognise which book it
+    belongs to. Confirmed on a real 154-photo client batch where this
+    accounted for 26 of 43 originally-unroutable files, clustering in
+    consecutive runs right next to confidently-classified neighbours from
+    the same book.
+
+    For each doc_type="unknown" file (`classified` must already be in
+    filename order -- how a photographed ledger's pages are naturally
+    numbered), look outward for the nearest ROUTABLE classification on each
+    side within this same batch. Only inherit it when BOTH sides exist and
+    agree on the exact same (doc_type, record_type, layout_variant) -- a
+    batch boundary between two different books/record types, or a run of
+    unknowns at the very start/end of the batch, is left as
+    NEEDS_MANUAL_CLASSIFICATION rather than guessed at with no supporting
+    evidence anywhere in the batch.
+    """
+    result = list(classified)
+    for i, (file_path, classification) in enumerate(result):
+        if classification.doc_type != "unknown":
+            continue
+
+        before = next((c for _, c in reversed(result[:i]) if c.status == "ROUTABLE"), None)
+        after = next((c for _, c in result[i + 1 :] if c.status == "ROUTABLE"), None)
+        if before is None or after is None:
+            continue
+        before_key = (before.doc_type, before.record_type, before.layout_variant)
+        after_key = (after.doc_type, after.record_type, after.layout_variant)
+        if before_key != after_key:
+            continue
+
+        logger.info(
+            "onedrive classify: inheriting %s from neighbouring pages for %s (was NEEDS_MANUAL_CLASSIFICATION)",
+            before_key,
+            file_path.name,
+        )
+        result[i] = (
+            file_path,
+            Classification(
+                doc_type=before.doc_type,
+                record_type=before.record_type,
+                layout_variant=before.layout_variant,
+                status="ROUTABLE",
+                config_path=before.config_path,
+            ),
+        )
+    return result
+
+
 def run_onedrive_fetch(
     submission_id: UUID,
     settings: Settings,
@@ -291,6 +348,7 @@ def run_onedrive_fetch(
 
         skipped_files: list[dict[str, str]] = []
         with session_factory() as session:
+            classified: list[tuple[Path, Classification]] = []
             for file_path in files:
                 try:
                     classification = runner.classify(file_path)
@@ -298,7 +356,11 @@ def run_onedrive_fetch(
                     logger.exception("classify failed for %s (submission %s)", file_path, submission_id)
                     skipped_files.append({"filename": file_path.name, "status": "CLASSIFY_FAILED"})
                     continue
+                classified.append((file_path, classification))
 
+            classified = _apply_neighbor_fallback(classified)
+
+            for file_path, classification in classified:
                 if classification.status != "ROUTABLE" or classification.record_type is None:
                     skipped_files.append({"filename": file_path.name, "status": classification.status})
                     continue

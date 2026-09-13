@@ -18,6 +18,7 @@ from marriage_ocr_api.db.repositories import list_jobs
 from marriage_ocr_api.onedrive.repositories import create_submission, get_submission, mark_failed, mark_fetching
 from marriage_ocr_api.onedrive.runner import Classification, OneDriveFetchError
 from marriage_ocr_api.onedrive.service import (
+    _apply_neighbor_fallback,
     _ingest_one_file,
     delete_submission,
     recover_stale_submissions,
@@ -215,6 +216,125 @@ def test_run_onedrive_fetch_skips_unroutable_files_without_creating_documents(tm
     assert updated.skipped_files == [{"filename": "jawi.jpg", "status": "SKIPPED_JAWI"}]
     assert list_documents(check_session, batch.id, limit=10, offset=0) == []
     assert job_executor.submitted == []
+    check_session.close()
+
+
+_ROUTABLE_NIKAH_LEGACY = Classification(
+    doc_type="handwritten",
+    record_type="nikah",
+    layout_variant="legacy",
+    status="ROUTABLE",
+    config_path="config/handwritten.yaml",
+)
+_ROUTABLE_CERAI_MODERN = Classification(
+    doc_type="handwritten",
+    record_type="cerai",
+    layout_variant="modern",
+    status="ROUTABLE",
+    config_path="config/handwritten_cerai_modern.yaml",
+)
+_UNKNOWN = Classification(
+    doc_type="unknown", record_type=None, layout_variant=None, status="NEEDS_MANUAL_CLASSIFICATION", config_path=None
+)
+
+
+def test_apply_neighbor_fallback_inherits_when_both_neighbours_agree() -> None:
+    # A continuation page whose title band Vision didn't recognise at all --
+    # confirmed on a real client batch (a bound ledger book's own middle
+    # pages), not just an OCR-garbled title (triage.py's fuzzy match already
+    # covers that case).
+    classified = [
+        (Path("page1.jpg"), _ROUTABLE_NIKAH_LEGACY),
+        (Path("page2.jpg"), _UNKNOWN),
+        (Path("page3.jpg"), _ROUTABLE_NIKAH_LEGACY),
+    ]
+    result = _apply_neighbor_fallback(classified)
+    assert [c.status for _, c in result] == ["ROUTABLE", "ROUTABLE", "ROUTABLE"]
+    inherited = result[1][1]
+    assert (inherited.doc_type, inherited.record_type, inherited.layout_variant) == ("handwritten", "nikah", "legacy")
+    assert inherited.config_path == "config/handwritten.yaml"
+
+
+def test_apply_neighbor_fallback_inherits_across_a_run_of_several_unknowns() -> None:
+    classified = [
+        (Path("page1.jpg"), _ROUTABLE_NIKAH_LEGACY),
+        (Path("page2.jpg"), _UNKNOWN),
+        (Path("page3.jpg"), _UNKNOWN),
+        (Path("page4.jpg"), _UNKNOWN),
+        (Path("page5.jpg"), _ROUTABLE_NIKAH_LEGACY),
+    ]
+    result = _apply_neighbor_fallback(classified)
+    assert all(c.status == "ROUTABLE" for _, c in result)
+
+
+def test_apply_neighbor_fallback_leaves_it_unresolved_when_neighbours_disagree() -> None:
+    # A genuine boundary between two different books/record types in the
+    # same batch must not guess -- there is no supporting evidence for
+    # either side to safely inherit.
+    classified = [
+        (Path("page1.jpg"), _ROUTABLE_NIKAH_LEGACY),
+        (Path("page2.jpg"), _UNKNOWN),
+        (Path("page3.jpg"), _ROUTABLE_CERAI_MODERN),
+    ]
+    result = _apply_neighbor_fallback(classified)
+    assert result[1][1].status == "NEEDS_MANUAL_CLASSIFICATION"
+
+
+def test_apply_neighbor_fallback_leaves_it_unresolved_at_a_batch_edge() -> None:
+    # No neighbour at all on one side (start/end of the batch) -- nothing to
+    # inherit from.
+    classified = [
+        (Path("page1.jpg"), _UNKNOWN),
+        (Path("page2.jpg"), _ROUTABLE_NIKAH_LEGACY),
+    ]
+    result = _apply_neighbor_fallback(classified)
+    assert result[0][1].status == "NEEDS_MANUAL_CLASSIFICATION"
+
+
+def test_apply_neighbor_fallback_never_touches_a_confidently_unroutable_status() -> None:
+    # SKIPPED_JAWI/BLOCKED_NO_TEMPLATE carry real signal (a genuinely Jawi
+    # page, a typed doc_type with no matching template) -- only a bare
+    # doc_type="unknown" (no header keyword matched at all) is eligible for
+    # fallback.
+    jawi = Classification(
+        doc_type="handwritten", record_type="nikah", layout_variant="legacy", status="SKIPPED_JAWI", config_path=None
+    )
+    classified = [
+        (Path("page1.jpg"), _ROUTABLE_NIKAH_LEGACY),
+        (Path("page2.jpg"), jawi),
+        (Path("page3.jpg"), _ROUTABLE_NIKAH_LEGACY),
+    ]
+    result = _apply_neighbor_fallback(classified)
+    assert result[1][1].status == "SKIPPED_JAWI"
+
+
+def test_run_onedrive_fetch_routes_a_file_via_neighbour_fallback(tmp_path: Path) -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!fallback")
+    session.commit()
+    session.close()
+
+    runner = FakeFetchRunner(
+        files={"page1.pdf": _FAKE_PDF_BYTES, "page2.pdf": _FAKE_PDF_BYTES, "page3.pdf": _FAKE_PDF_BYTES},
+        classifications={
+            "page1.pdf": _ROUTABLE_NIKAH_LEGACY,
+            "page2.pdf": _UNKNOWN,
+            "page3.pdf": _ROUTABLE_NIKAH_LEGACY,
+        },
+    )
+    job_executor = FakeJobExecutor()
+
+    run_onedrive_fetch(submission.id, Settings(storage_root=tmp_path), session_factory, job_executor, runner)
+
+    check_session = session_factory()
+    updated = get_submission(check_session, submission.id)
+    assert updated.skipped_files is None
+    documents = list_documents(check_session, batch.id, limit=10, offset=0)
+    assert len(documents) == 3
+    assert all(doc.document_type == DocumentType.HANDWRITTEN_REGISTER.value for doc in documents)
     check_session.close()
 
 
