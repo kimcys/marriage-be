@@ -106,8 +106,8 @@ def build_job_download_response(job: OCRJob, settings: Settings) -> FileResponse
 
 def retry_job(job_id: UUID, session: Session, executor: JobExecutorProtocol) -> OCRJob:
     job = get_job_or_raise(job_id, session)
-    if job.status != JobStatus.FAILED.value:
-        raise ApiError(409, "JOB_NOT_FAILED", "Only a failed job can be retried.")
+    if job.status not in {JobStatus.FAILED.value, JobStatus.CANCELLED.value}:
+        raise ApiError(409, "JOB_NOT_RETRYABLE", "Only a failed or cancelled job can be retried.")
 
     job = repositories.mark_pending_for_retry(session, job_id)
     session.commit()

@@ -74,6 +74,9 @@ def _document_with_jobs(session: Session, job_statuses: list[JobStatus]) -> UUID
         ([JobStatus.FAILED, JobStatus.FAILED], DocumentStatus.FAILED),
         ([JobStatus.COMPLETED, JobStatus.FAILED], DocumentStatus.PROCESSED),
         ([JobStatus.COMPLETED], DocumentStatus.PROCESSED),
+        ([JobStatus.CANCELLED, JobStatus.CANCELLED], DocumentStatus.CANCELLED),
+        ([JobStatus.CANCELLED, JobStatus.FAILED], DocumentStatus.CANCELLED),
+        ([JobStatus.COMPLETED, JobStatus.CANCELLED], DocumentStatus.PROCESSED),
     ],
 )
 def test_recompute_document_status_aggregates_job_statuses(

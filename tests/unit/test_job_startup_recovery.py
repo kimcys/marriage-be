@@ -105,7 +105,7 @@ def test_executor_processes_job_with_fresh_session(tmp_path: Path) -> None:
     session.close()
 
     class FakeRunner:
-        def run(self, request: OCRRunRequest) -> OCRRunResult:
+        def run(self, request: OCRRunRequest, cancel_requested=None) -> OCRRunResult:
             request.output_path.parent.mkdir(parents=True, exist_ok=True)
             workbook = openpyxl.Workbook()
             workbook.active.append(["full_name", "Confidence"])

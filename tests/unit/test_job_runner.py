@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -290,6 +291,78 @@ def test_runner_reports_timeout(tmp_path: Path) -> None:
     assert result.timed_out is True
     assert "terminate" in calls
     assert "kill" in calls
+
+
+def test_runner_kills_process_when_cancellation_requested(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Fast poll interval -- otherwise this test would wait on the real
+    # (production) 2-second cadence before the watcher thread notices.
+    monkeypatch.setattr("marriage_ocr_api.jobs.runner._CANCEL_POLL_INTERVAL_SECONDS", 0.01)
+
+    settings = _settings(tmp_path)
+    request = OCRRunRequest(
+        input_path=tmp_path / "input.pdf",
+        output_path=tmp_path / "output.xlsx",
+        debug_path=tmp_path / "debug",
+        stdout_log_path=tmp_path / "stdout.log",
+        stderr_log_path=tmp_path / "stderr.log",
+    )
+    request.input_path.write_bytes(b"%PDF-1.4\n")
+
+    class FakeProcess:
+        pid = 123
+        returncode = None
+
+        def __init__(self) -> None:
+            self._terminated = threading.Event()
+
+        def wait(self, timeout: float | None = None) -> int:
+            # Simulates a still-running subprocess: blocks until something
+            # calls terminate()/kill(), exactly like a real Popen.wait()
+            # would once the process actually exits.
+            if self._terminated.wait(timeout=timeout):
+                return 0
+            raise subprocess.TimeoutExpired(cmd="fake", timeout=timeout or 0.0)
+
+        def terminate(self) -> None:
+            self._terminated.set()
+
+        def kill(self) -> None:
+            self._terminated.set()
+
+    runner = SubprocessOCRRunner(settings, popen=lambda *args, **kwargs: FakeProcess())
+    result = runner.run(request, cancel_requested=lambda: True)
+
+    assert result.cancelled is True
+    assert result.timed_out is False
+    assert result.return_code == 0
+
+
+def test_runner_ignores_cancel_requested_that_never_fires(tmp_path: Path) -> None:
+    """A job that finishes normally while a cancel_requested callback is
+    wired up (but never returns true) must behave exactly like the no-
+    callback case -- cancelled stays false and the real return code/timeout
+    reporting is untouched."""
+    settings = _settings(tmp_path)
+    request = OCRRunRequest(
+        input_path=tmp_path / "input.pdf",
+        output_path=tmp_path / "output.xlsx",
+        debug_path=tmp_path / "debug",
+        stdout_log_path=tmp_path / "stdout.log",
+        stderr_log_path=tmp_path / "stderr.log",
+    )
+    request.input_path.write_bytes(b"%PDF-1.4\n")
+
+    class FakeProcess:
+        returncode = 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    runner = SubprocessOCRRunner(settings, popen=lambda *args, **kwargs: FakeProcess())
+    result = runner.run(request, cancel_requested=lambda: False)
+
+    assert result.cancelled is False
+    assert result.return_code == 0
 
 
 def test_sanitizes_ansi_sequences_from_stderr() -> None:

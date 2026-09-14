@@ -18,6 +18,7 @@ from marriage_ocr_api.jobs.runner import (
     failure_code_for_run,
     read_sanitized_stderr,
 )
+from marriage_ocr_api.jobs.status import JobStatus
 from marriage_ocr_api.records.importer import import_records_from_csv, import_records_from_xlsx
 from marriage_ocr_api.storage.factory import get_storage_service
 
@@ -76,6 +77,15 @@ def process_ocr_job(
     try:
         logger.info("starting OCR job %s", job_id)
         with session_factory() as session:
+            job = repositories.get_job(session, job_id)
+            if job is None:
+                raise LookupError(f"job {job_id} not found")
+            if job.status == JobStatus.CANCELLED.value:
+                # Cancelled while still PENDING (see batches/service.py::
+                # cancel_batch_processing) -- it was never actually started,
+                # so there's nothing to run and nothing further to mark.
+                logger.info("skipping OCR job %s: cancelled before it started", job_id)
+                return
             started_at = datetime.now(UTC)
             repositories.mark_processing(session, job_id, started_at)
             session.commit()
@@ -113,7 +123,27 @@ def process_ocr_job(
             stderr_log_path=stderr_log_path,
             document_type=document_type,
         )
-        result = runner.run(request)
+
+        def _cancel_requested() -> bool:
+            # Polled every couple of seconds while the OCR subprocess runs
+            # (see jobs/runner.py's cancel_requested watcher) -- a fresh,
+            # short-lived session per check is fine at that rate.
+            with session_factory() as check_session:
+                current = repositories.get_job(check_session, job_id)
+                return current is not None and current.status == JobStatus.CANCELLED.value
+
+        result = runner.run(request, cancel_requested=_cancel_requested)
+        if result.cancelled:
+            completed_at = datetime.now(UTC)
+            with session_factory() as session:
+                repositories.mark_cancelled(session, job_id, completed_at)
+                if job.document_id is not None:
+                    recompute_document_status(session, job.document_id)
+                if job.batch_id is not None:
+                    recompute_batch_status(session, job.batch_id)
+                session.commit()
+            logger.info("cancelled OCR job %s", job_id)
+            return
         failure_code = failure_code_for_run(result, request.output_path)
         if failure_code is None:
             completed_at = datetime.now(UTC)

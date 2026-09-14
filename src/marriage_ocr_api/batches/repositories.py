@@ -156,9 +156,13 @@ def recompute_document_status(session: Session, document_id: UUID) -> None:
     A document reaches PROCESSED once at least one job has completed and none
     are still pending/processing -- a partially-failed document still yields a
     usable, exportable set of records. Only a document where every single job
-    failed is marked FAILED. Individual page failures stay visible at the job
-    level (see the document_id/batch_id filters on GET /api/v1/jobs) rather
-    than being hidden behind an all-or-nothing document status.
+    failed is marked FAILED. A document with no completed job but at least one
+    job stopped via "Stop processing" (see batches/service.py::
+    cancel_batch_processing) is marked CANCELLED rather than FAILED -- a
+    cancelled job isn't a processing failure. Individual page failures/
+    cancellations stay visible at the job level (see the document_id/batch_id
+    filters on GET /api/v1/jobs) rather than being hidden behind an
+    all-or-nothing document status.
     """
     document = session.get(Document, document_id)
     if document is None:
@@ -172,6 +176,8 @@ def recompute_document_status(session: Session, document_id: UUID) -> None:
         next_status = DocumentStatus.PROCESSING
     elif all(status == JobStatus.FAILED.value for status in job_statuses):
         next_status = DocumentStatus.FAILED
+    elif JobStatus.CANCELLED.value in job_statuses and JobStatus.COMPLETED.value not in job_statuses:
+        next_status = DocumentStatus.CANCELLED
     else:
         next_status = DocumentStatus.PROCESSED
 
@@ -197,6 +203,8 @@ def recompute_batch_status(session: Session, batch_id: UUID) -> None:
         next_status = BatchStatus.FAILED
     elif document_statuses & {DocumentStatus.QUEUED.value, DocumentStatus.PROCESSING.value}:
         next_status = BatchStatus.PROCESSING
+    elif DocumentStatus.CANCELLED.value in document_statuses:
+        next_status = BatchStatus.CANCELLED
     else:
         next_status = BatchStatus.DRAFT
     if batch.status == next_status.value:
@@ -205,7 +213,7 @@ def recompute_batch_status(session: Session, batch_id: UUID) -> None:
     batch.updated_at = utcnow()
     if next_status == BatchStatus.PROCESSING and batch.started_at is None:
         batch.started_at = utcnow()
-    if next_status in (BatchStatus.COMPLETED, BatchStatus.FAILED):
+    if next_status in (BatchStatus.COMPLETED, BatchStatus.FAILED, BatchStatus.CANCELLED):
         batch.completed_at = utcnow()
     session.flush()
 

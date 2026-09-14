@@ -10,9 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.batches.models import Document, Export
-from marriage_ocr_api.batches.repositories import delete_batch_row
+from marriage_ocr_api.batches.models import Batch, Document, Export, utcnow
+from marriage_ocr_api.batches.repositories import (
+    delete_batch_row,
+    recompute_batch_status,
+    recompute_document_status,
+)
 from marriage_ocr_api.core.config import Settings
+from marriage_ocr_api.db import repositories as job_repositories
 from marriage_ocr_api.db.models import OCRJob
 from marriage_ocr_api.storage.factory import get_storage_service
 
@@ -91,3 +96,31 @@ def delete_batch(session: Session, settings: Settings, batch_id: UUID) -> None:
     # storage_root/batches/{batch_id}/ -- see batches/document_ingest.py.
     for job_id in job_ids:
         shutil.rmtree(storage_root / "jobs" / str(job_id), ignore_errors=True)
+
+
+def cancel_batch_processing(session: Session, batch_id: UUID) -> Batch:
+    """Stops every PENDING/PROCESSING OCR job in a batch -- immediately for a
+    PENDING job (it's simply skipped once picked up, see jobs/processing.py's
+    early-exit check), and by killing the running subprocess within a couple
+    of seconds for a PROCESSING one (see jobs/runner.py's cancel_requested
+    watcher). Scoped to OCRJob rows only -- OneDrive link fetch/classify
+    submissions are a separate concept and are left untouched. Idempotent: if
+    nothing is PENDING/PROCESSING, this is a no-op and the batch is returned
+    unchanged, same as retrying an already-tracked OneDrive link.
+    """
+    completed_at = utcnow()
+    cancelled_jobs = job_repositories.cancel_pending_and_processing_jobs_for_batch(session, batch_id, completed_at)
+
+    seen_document_ids: set[UUID] = set()
+    for job in cancelled_jobs:
+        if job.document_id is not None and job.document_id not in seen_document_ids:
+            seen_document_ids.add(job.document_id)
+            recompute_document_status(session, job.document_id)
+    if cancelled_jobs:
+        recompute_batch_status(session, batch_id)
+    session.commit()
+
+    batch = session.get(Batch, batch_id)
+    if batch is None:
+        raise ApiError(404, "BATCH_NOT_FOUND", f"Batch {batch_id} not found.")
+    return batch

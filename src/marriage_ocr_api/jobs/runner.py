@@ -4,7 +4,9 @@ import os
 import re
 import signal
 import subprocess
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -13,6 +15,12 @@ from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.core.config import Settings
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+# How often the cancellation watcher thread (see SubprocessOCRRunner.run's
+# cancel_requested parameter) polls for a stop request while a job is
+# running -- the worst-case delay between "Stop processing" being clicked
+# and this specific job's OCR subprocess actually receiving SIGTERM.
+_CANCEL_POLL_INTERVAL_SECONDS = 2.0
 
 _CLI_COMMAND_BY_DOCUMENT_TYPE = {
     DocumentType.HANDWRITTEN_REGISTER: "process",
@@ -67,6 +75,7 @@ class OCRRunResult:
     return_code: int
     timed_out: bool
     duration_seconds: float
+    cancelled: bool = False
 
 
 class PopenFactory(Protocol):
@@ -168,7 +177,11 @@ class SubprocessOCRRunner:
         if callable(kill):
             kill()
 
-    def run(self, request: OCRRunRequest) -> OCRRunResult:
+    def run(
+        self,
+        request: OCRRunRequest,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> OCRRunResult:
         request.stdout_log_path.parent.mkdir(parents=True, exist_ok=True)
         request.stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
         request.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -197,19 +210,53 @@ class SubprocessOCRRunner:
                 start_new_session=True,
             )
             timed_out = False
+            cancelled = False
             return_code = 0
+
+            # Watches for an externally-requested cancellation (see
+            # jobs/processing.py's "Stop processing" support) alongside the
+            # blocking process.wait() below, and kills the process the
+            # moment one comes in -- which makes that wait() return almost
+            # immediately, so the existing timeout handling below doesn't
+            # need to change at all. A daemon thread: if the process exits
+            # on its own first, `stop_watching` tells it to give up rather
+            # than leaving it polling forever.
+            stop_watching = threading.Event()
+
+            def _watch_for_cancellation() -> None:
+                nonlocal cancelled
+                if cancel_requested is None:
+                    return
+                while not stop_watching.wait(timeout=_CANCEL_POLL_INTERVAL_SECONDS):
+                    if cancel_requested():
+                        cancelled = True
+                        self._terminate_process_group(process)
+                        return
+
+            watcher: threading.Thread | None = None
+            if cancel_requested is not None:
+                watcher = threading.Thread(target=_watch_for_cancellation, daemon=True)
+                watcher.start()
+
             try:
-                return_code = int(process.wait(timeout=self.settings.ocr_timeout_seconds))
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                self._terminate_process_group(process)
                 try:
-                    return_code = int(process.wait(timeout=5))
-                except Exception:
-                    self._kill_process_group(process)
+                    return_code = int(process.wait(timeout=self.settings.ocr_timeout_seconds))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    self._terminate_process_group(process)
                     try:
                         return_code = int(process.wait(timeout=5))
                     except Exception:
-                        return_code = -1
+                        self._kill_process_group(process)
+                        try:
+                            return_code = int(process.wait(timeout=5))
+                        except Exception:
+                            return_code = -1
+            finally:
+                stop_watching.set()
+                if watcher is not None:
+                    watcher.join(timeout=_CANCEL_POLL_INTERVAL_SECONDS + 5)
             duration = time.monotonic() - start
-        return OCRRunResult(return_code=return_code, timed_out=timed_out, duration_seconds=duration)
+        return OCRRunResult(
+            return_code=return_code, timed_out=timed_out, duration_seconds=duration, cancelled=cancelled
+        )

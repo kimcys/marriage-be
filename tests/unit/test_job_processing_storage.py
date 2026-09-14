@@ -20,7 +20,7 @@ from marriage_ocr_api.records.models import OCRRecord
 
 
 class FakeSuccessRunner:
-    def run(self, request: OCRRunRequest) -> OCRRunResult:
+    def run(self, request: OCRRunRequest, cancel_requested=None) -> OCRRunResult:
         # A real subprocess needs its input file to exist -- fail loudly
         # (like the real OCR CLI would) if the S3-materialize step didn't
         # actually put it there before the run.
@@ -43,7 +43,7 @@ class FakeTypedSuccessRunner:
     import_records_from_csv (it silently keyed the first column as
     "﻿Bil" instead of "Bil")."""
 
-    def run(self, request: OCRRunRequest) -> OCRRunResult:
+    def run(self, request: OCRRunRequest, cancel_requested=None) -> OCRRunResult:
         assert request.input_path.exists(), "input file must be materialized before the OCR run"
         request.output_path.parent.mkdir(parents=True, exist_ok=True)
         request.output_path.write_text(

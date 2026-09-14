@@ -10,7 +10,7 @@ from marriage_ocr_api.api.dependencies import get_db_session, settings_dependenc
 from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.repositories import count_batches, create_batch, get_batch, get_document, list_batches
 from marriage_ocr_api.batches.response_models import BatchCreateRequest, BatchResponse, PaginatedBatches
-from marriage_ocr_api.batches.service import build_document_download_response, delete_batch
+from marriage_ocr_api.batches.service import build_document_download_response, cancel_batch_processing, delete_batch
 from marriage_ocr_api.core.config import Settings
 
 router = APIRouter(prefix="/api/v1/batches", tags=["batches"])
@@ -81,6 +81,21 @@ def delete_one_batch(
         raise _batch_not_found(batch_id)
     delete_batch(session, settings, batch_id)
     return Response(status_code=204)
+
+
+@router.post("/{batch_id}/cancel", response_model=BatchResponse, operation_id="cancel_batch_processing")
+def cancel_one_batch_processing(
+    batch_id: UUID,
+    session: Session = Depends(get_db_session),
+) -> BatchResponse:
+    """Stops the batch's in-flight OCR processing -- every PENDING job is
+    skipped and every PROCESSING job's subprocess is killed. Safe to call
+    when nothing is running (no-op, 200) rather than erroring."""
+    batch = get_batch(session, batch_id)
+    if batch is None:
+        raise _batch_not_found(batch_id)
+    batch = cancel_batch_processing(session, batch_id)
+    return BatchResponse.model_validate(batch)
 
 
 @router.get("/{batch_id}/documents/{document_id}/download", response_model=None, operation_id="download_document")

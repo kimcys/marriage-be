@@ -538,7 +538,8 @@
           "PENDING",
           "PROCESSING",
           "COMPLETED",
-          "FAILED"
+          "FAILED",
+          "CANCELLED"
         ],
         "title": "JobStatus",
         "type": "string"
@@ -1423,6 +1424,50 @@
           }
         },
         "summary": "Get One Batch",
+        "tags": [
+          "batches"
+        ]
+      }
+    },
+    "/api/v1/batches/{batch_id}/cancel": {
+      "post": {
+        "description": "Stops the batch's in-flight OCR processing -- every PENDING job is\nskipped and every PROCESSING job's subprocess is killed. Safe to call\nwhen nothing is running (no-op, 200) rather than erroring.",
+        "operationId": "cancel_batch_processing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel One Batch Processing",
         "tags": [
           "batches"
         ]

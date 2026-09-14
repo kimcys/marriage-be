@@ -169,8 +169,8 @@ def mark_failed(
 
 def mark_pending_for_retry(session: Session, job_id: UUID) -> OCRJob:
     job = _require_job(session, job_id)
-    if job.status != JobStatus.FAILED.value:
-        raise JobTransitionError(f"job {job_id} is not failed")
+    if job.status not in {JobStatus.FAILED.value, JobStatus.CANCELLED.value}:
+        raise JobTransitionError(f"job {job_id} is not failed or cancelled")
     job.status = JobStatus.PENDING.value
     job.error_code = None
     job.error_message = None
@@ -179,6 +179,53 @@ def mark_pending_for_retry(session: Session, job_id: UUID) -> OCRJob:
     job.updated_at = utcnow()
     session.flush()
     return job
+
+
+def mark_cancelled(session: Session, job_id: UUID, completed_at: datetime) -> OCRJob:
+    """Idempotent w.r.t. an already-CANCELLED job (allowed, not just
+    PENDING/PROCESSING): cancel_pending_and_processing_jobs_for_batch already
+    flips a running job's status the instant "Stop processing" is clicked,
+    before its worker has actually killed the OCR subprocess -- this is what
+    jobs/processing.py calls afterward, once the kill has actually happened,
+    purely to record the real completed_at/updated_at timestamps.
+    """
+    job = _require_job(session, job_id)
+    if job.status not in {JobStatus.PENDING.value, JobStatus.PROCESSING.value, JobStatus.CANCELLED.value}:
+        raise JobTransitionError(f"job {job_id} cannot be cancelled from status {job.status}")
+    job.status = JobStatus.CANCELLED.value
+    job.completed_at = completed_at
+    job.updated_at = completed_at
+    session.flush()
+    return job
+
+
+def cancel_pending_and_processing_jobs_for_batch(
+    session: Session, batch_id: UUID, completed_at: datetime
+) -> list[OCRJob]:
+    """Cancel every PENDING/PROCESSING job in a batch in one shot -- the
+    backing operation for "Stop processing" (batches/service.py::
+    cancel_batch_processing). A PENDING job simply never runs (see
+    jobs/processing.py::process_ocr_job's early-exit check for an
+    already-cancelled job); a PROCESSING job's own worker notices this row's
+    new status within a couple of seconds and kills its OCR subprocess (see
+    jobs/runner.py's cancel_requested watcher). Returns the affected jobs so
+    the caller can recompute their document/batch status, same pattern as
+    fail_interrupted_jobs/fail_stale_processing_jobs above.
+    """
+    jobs = list(
+        session.scalars(
+            select(OCRJob).where(
+                OCRJob.batch_id == batch_id,
+                OCRJob.status.in_([JobStatus.PENDING.value, JobStatus.PROCESSING.value]),
+            )
+        )
+    )
+    for job in jobs:
+        job.status = JobStatus.CANCELLED.value
+        job.completed_at = completed_at
+        job.updated_at = completed_at
+    session.flush()
+    return jobs
 
 
 def fail_interrupted_jobs(session: Session, completed_at: datetime) -> list[OCRJob]:

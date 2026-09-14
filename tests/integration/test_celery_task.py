@@ -55,7 +55,7 @@ def test_run_ocr_job_task_processes_job_synchronously(monkeypatch, tmp_path: Pat
         def __init__(self, settings: Settings) -> None:
             pass
 
-        def run(self, request: OCRRunRequest) -> OCRRunResult:
+        def run(self, request: OCRRunRequest, cancel_requested=None) -> OCRRunResult:
             request.output_path.parent.mkdir(parents=True, exist_ok=True)
             workbook = openpyxl.Workbook()
             workbook.active.append(["full_name", "Confidence"])

@@ -242,3 +242,52 @@ def test_completed_job_missing_output_returns_410(client: TestClient, session: S
 
     assert response.status_code == 410
     assert response.json()["error"]["code"] == "OUTPUT_FILE_MISSING"
+
+
+def test_cancelled_job_can_be_retried(client: TestClient, session: Session) -> None:
+    job_id = UUID("123e4567-e89b-12d3-a456-426614174300")
+    create_job(
+        session,
+        id=job_id,
+        status=JobStatus.CANCELLED,
+        original_filename="register.pdf",
+        stored_filename="source.pdf",
+        content_type="application/pdf",
+        file_size_bytes=1,
+        input_relative_path=f"jobs/{job_id}/input/source.pdf",
+        debug_relative_path=f"jobs/{job_id}/debug",
+        stdout_log_relative_path=f"jobs/{job_id}/logs/stdout.log",
+        stderr_log_relative_path=f"jobs/{job_id}/logs/stderr.log",
+        ocr_git_ref="abc123",
+    )
+    session.commit()
+
+    response = client.post(f"/api/v1/jobs/{job_id}/retry")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "PENDING"
+
+
+def test_completed_job_cannot_be_retried(client: TestClient, session: Session) -> None:
+    job_id = UUID("123e4567-e89b-12d3-a456-426614174301")
+    create_job(
+        session,
+        id=job_id,
+        status=JobStatus.COMPLETED,
+        original_filename="register.pdf",
+        stored_filename="source.pdf",
+        content_type="application/pdf",
+        file_size_bytes=1,
+        input_relative_path=f"jobs/{job_id}/input/source.pdf",
+        output_relative_path=f"jobs/{job_id}/output/result.xlsx",
+        debug_relative_path=f"jobs/{job_id}/debug",
+        stdout_log_relative_path=f"jobs/{job_id}/logs/stdout.log",
+        stderr_log_relative_path=f"jobs/{job_id}/logs/stderr.log",
+        ocr_git_ref="abc123",
+    )
+    session.commit()
+
+    response = client.post(f"/api/v1/jobs/{job_id}/retry")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "JOB_NOT_RETRYABLE"
