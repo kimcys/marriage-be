@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     minio_secret_access_key: str = "minio123"
     valkey_url: str = "redis://valkey:6379/0"
     job_executor_backend: str = "thread_pool"
+    # Insecure placeholder default, same convention as minio_secret_access_key
+    # above -- every real deployment must override this via JWT_SECRET_KEY.
+    # Not a required-with-no-default field: that would break every existing
+    # test constructing Settings(storage_root=...) without this.
+    jwt_secret_key: str = "change-me-in-production-use-a-real-random-secret"
+    jwt_algorithm: str = "HS256"
+    jwt_expires_minutes: int = 60 * 24 * 7
 
     @classmethod
     def settings_customise_sources(
@@ -121,6 +128,7 @@ class Settings(BaseSettings):
         "onedrive_fetch_timeout_seconds",
         "ocr_stderr_api_limit",
         "ocr_max_concurrent_jobs",
+        "jwt_expires_minutes",
         mode="after",
     )
     @classmethod

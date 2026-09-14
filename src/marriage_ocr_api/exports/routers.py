@@ -8,6 +8,7 @@ from starlette.responses import Response
 
 from marriage_ocr_api.api.dependencies import get_db_session, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
+from marriage_ocr_api.auth.dependencies import require_admin
 from marriage_ocr_api.batches.repositories import count_exports, get_batch, get_export, list_exports
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.exports.response_models import ExportCreateRequest, ExportResponse, PaginatedExports
@@ -104,7 +105,7 @@ def download_export(
         raise ApiError(410, "EXPORT_FILE_MISSING", "The expected export file is missing.") from exc
 
 
-@router.delete("/{export_id}", status_code=204, operation_id="delete_export")
+@router.delete("/{export_id}", status_code=204, operation_id="delete_export", dependencies=[Depends(require_admin)])
 def delete_one_export(
     export_id: UUID,
     session: Session = Depends(get_db_session),

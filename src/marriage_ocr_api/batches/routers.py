@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from marriage_ocr_api.api.dependencies import get_db_session, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
+from marriage_ocr_api.auth.dependencies import require_admin
 from marriage_ocr_api.batches.repositories import count_batches, create_batch, get_batch, get_document, list_batches
 from marriage_ocr_api.batches.response_models import BatchCreateRequest, BatchResponse, PaginatedBatches
 from marriage_ocr_api.batches.service import build_document_download_response, cancel_batch_processing, delete_batch
@@ -70,7 +71,7 @@ def get_one_batch(batch_id: UUID, session: Session = Depends(get_db_session)) ->
     return BatchResponse.model_validate(batch)
 
 
-@router.delete("/{batch_id}", status_code=204, operation_id="delete_batch")
+@router.delete("/{batch_id}", status_code=204, operation_id="delete_batch", dependencies=[Depends(require_admin)])
 def delete_one_batch(
     batch_id: UUID,
     session: Session = Depends(get_db_session),

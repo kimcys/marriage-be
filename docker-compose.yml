@@ -24,6 +24,9 @@ x-ocr-common-env: &ocr-common-env
   VALKEY_URL: ${VALKEY_URL:-redis://valkey:6379/0}
   JOB_EXECUTOR_BACKEND: ${JOB_EXECUTOR_BACKEND:-celery}
   OCR_MAX_CONCURRENT_JOBS: ${OCR_MAX_CONCURRENT_JOBS:-4}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-use-a-real-random-secret}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+  JWT_EXPIRES_MINUTES: ${JWT_EXPIRES_MINUTES:-10080}
 
 services:
   postgres:

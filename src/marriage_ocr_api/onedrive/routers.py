@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from marriage_ocr_api.api.dependencies import get_db_session, get_onedrive_executor, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
+from marriage_ocr_api.auth.dependencies import require_admin
 from marriage_ocr_api.batches.repositories import get_batch
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.onedrive import repositories
@@ -147,6 +148,7 @@ def retry_onedrive_link(
     "/{batch_id}/onedrive-links/{submission_id}",
     status_code=204,
     operation_id="delete_onedrive_link",
+    dependencies=[Depends(require_admin)],
 )
 def delete_onedrive_link(
     batch_id: UUID,

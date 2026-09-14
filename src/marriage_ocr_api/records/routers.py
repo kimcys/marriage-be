@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from marriage_ocr_api.api.dependencies import get_db_session
 from marriage_ocr_api.api.errors import ApiError
+from marriage_ocr_api.auth.dependencies import require_admin
 from marriage_ocr_api.records.api import (
     build_bulk_approve_response,
     build_record_response,
@@ -109,7 +110,9 @@ def get_record(record_id: UUID, session: Session = Depends(get_db_session)) -> R
     return build_record_response(record, original_filename=get_document_filename(session, record.document_id))
 
 
-@router.delete("/api/v1/records/{record_id}", status_code=204, operation_id="delete_record")
+@router.delete(
+    "/api/v1/records/{record_id}", status_code=204, operation_id="delete_record", dependencies=[Depends(require_admin)]
+)
 def delete_one_record(record_id: UUID, session: Session = Depends(get_db_session)) -> Response:
     try:
         delete_record(session, record_id)

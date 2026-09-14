@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from marriage_ocr_api.api.errors import ApiError, build_error_response
 from marriage_ocr_api.api.routers import (
+    auth_router,
     batches_router,
     exports_router,
     health_router,
@@ -18,6 +19,7 @@ from marriage_ocr_api.api.routers import (
     onedrive_router,
     records_router,
 )
+from marriage_ocr_api.auth.dependencies import require_user
 from marriage_ocr_api.core.config import Settings, get_settings
 from marriage_ocr_api.core.logging import configure_logging
 from marriage_ocr_api.core.request_id import (
@@ -79,6 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
         openapi_tags=[
+            {"name": "auth", "description": "Login and JWT issuance"},
             {"name": "batches", "description": "Batch creation and listing"},
             {"name": "exports", "description": "Batch export creation, listing, and downloads"},
             {"name": "health", "description": "Liveness and readiness endpoints"},
@@ -137,12 +140,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request_id = request_id_context.get() or normalize_request_id(request.headers.get("X-Request-ID"))
         return _error_response(500, "INTERNAL_ERROR", "An unexpected error occurred.", request_id)
 
+    # health and auth stay open -- Docker healthchecks and the login call
+    # itself have no token yet. Every other router requires a logged-in
+    # user by default (see auth/dependencies.py::require_user); the 4
+    # DELETE routes additionally require the admin role via their own
+    # per-route Depends(require_admin).
+    authenticated = [Depends(require_user)]
     app.include_router(health_router)
-    app.include_router(jobs_router)
-    app.include_router(batches_router)
-    app.include_router(exports_router)
-    app.include_router(onedrive_router)
-    app.include_router(records_router)
+    app.include_router(auth_router)
+    app.include_router(jobs_router, dependencies=authenticated)
+    app.include_router(batches_router, dependencies=authenticated)
+    app.include_router(exports_router, dependencies=authenticated)
+    app.include_router(onedrive_router, dependencies=authenticated)
+    app.include_router(records_router, dependencies=authenticated)
     return app
 
 
