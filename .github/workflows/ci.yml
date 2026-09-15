@@ -196,7 +196,7 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -e
-            cd /opt/marriage-be
+            cd /root/marriage-be
             git pull --ff-only origin main
             export IMAGE_TAG=${{ github.sha }}
             docker compose -f docker-compose.production.yml --env-file .env.production pull api beat
@@ -212,7 +212,7 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -e
-            cd /opt/marriage-be
+            cd /root/marriage-be
             git pull --ff-only origin main
             export IMAGE_TAG=${{ github.sha }}
             docker compose -f docker-compose.production.yml --env-file .env.production pull worker
