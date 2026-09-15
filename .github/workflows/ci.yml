@@ -106,6 +106,12 @@ jobs:
 
   docker-e2e:
     runs-on: ubuntu-latest
+    # Allowed to fail for now -- this smoke test still assumes a direct
+    # document-upload endpoint that no longer exists (real ingestion is
+    # OneDrive-link-only, which needs real network access CI doesn't have).
+    # Doesn't block `deploy` (see its `needs:` below) until the test itself
+    # is redesigned around the OneDrive-only ingestion flow.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

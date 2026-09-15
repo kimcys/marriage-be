@@ -10,8 +10,24 @@ from pathlib import Path
 import httpx
 
 
-def _run(command: list[str], *, cwd: Path, env: dict[str, str]) -> None:
-    subprocess.run(command, cwd=cwd, env=env, check=True)
+def _run(command: list[str], *, cwd: Path, env: dict[str, str], input_text: str | None = None) -> None:
+    subprocess.run(command, cwd=cwd, env=env, check=True, input=input_text, text=input_text is not None)
+
+
+def _create_test_admin_and_login(client: httpx.Client, repo_root: Path, env: dict[str, str]) -> None:
+    email = "docker-e2e@example.com"
+    password = "docker-e2e-password"
+    _run(
+        ["/usr/bin/env", "docker", "compose", "exec", "-T", "api", "python", "-m", "marriage_ocr_api.auth.cli"]
+        + ["create-user", "--email", email, "--role", "ADMIN"],
+        cwd=repo_root,
+        env=env,
+        input_text=f"{password}\n{password}\n",
+    )
+    login_response = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    login_response.raise_for_status()
+    token = login_response.json()["access_token"]
+    client.headers["Authorization"] = f"Bearer {token}"
 
 
 def _wait_for_ready(client: httpx.Client, timeout_seconds: int = 120) -> dict[str, object]:
@@ -94,6 +110,7 @@ def main() -> int:
             )
             with httpx.Client(base_url="http://localhost:8000", timeout=10.0) as client:
                 _wait_for_ready(client)
+                _create_test_admin_and_login(client, repo_root, env)
 
                 batch_response = client.post(
                     "/api/v1/batches",
