@@ -8,6 +8,7 @@ image) specifically so it's runnable inside the running container:
     docker compose exec api python -m marriage_ocr_api.auth.cli create-user \\
         --email admin@example.com --role ADMIN
 """
+
 from __future__ import annotations
 
 import argparse

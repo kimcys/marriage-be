@@ -170,9 +170,7 @@ def test_delete_missing_batch_returns_404(client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_cancel_batch_processing_cancels_pending_and_processing_jobs_only(
-    client: TestClient, session: Session
-) -> None:
+def test_cancel_batch_processing_cancels_pending_and_processing_jobs_only(client: TestClient, session: Session) -> None:
     batch_id = UUID(client.post("/api/v1/batches", json={"name": "Batch 1"}).json()["id"])
 
     pending_document = create_document(

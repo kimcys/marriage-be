@@ -10,8 +10,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
+from tests.conftest import build_fake_admin_user
 
 from marriage_ocr_api.api.dependencies import get_db_session
+from marriage_ocr_api.auth.dependencies import require_user
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.repositories import create_job
@@ -67,6 +69,7 @@ def test_completed_job_imports_records(tmp_path: Path, monkeypatch: pytest.Monke
             db.close()
 
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[require_user] = build_fake_admin_user
 
     client = TestClient(app)
     try:

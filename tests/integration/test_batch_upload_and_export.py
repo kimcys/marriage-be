@@ -10,8 +10,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
+from tests.conftest import build_fake_admin_user
 
 from marriage_ocr_api.api.dependencies import get_db_session
+from marriage_ocr_api.auth.dependencies import require_user
 from marriage_ocr_api.batches.repositories import create_document
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
@@ -82,6 +84,7 @@ def client(engine, tmp_path: Path) -> TestClient:
     app = create_app(Settings(storage_root=tmp_path))
     app.state.executor = FakeExecutor()
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[require_user] = build_fake_admin_user
     return TestClient(app)
 
 
@@ -140,6 +143,7 @@ def test_export_download_round_trips_through_real_minio(engine, tmp_path: Path) 
     app = create_app(settings)
     app.state.executor = FakeExecutor()
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[require_user] = build_fake_admin_user
     client = TestClient(app)
 
     batch_response = client.post("/api/v1/batches", json={"name": "S3 batch"})
