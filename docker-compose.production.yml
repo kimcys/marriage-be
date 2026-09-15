@@ -80,6 +80,14 @@ services:
       - ${GOOGLE_APPLICATION_CREDENTIALS:?set path to your google-vision.json on this Droplet}:/run/secrets/google-vision.json:ro
     ports:
       - "8000:8000"
+    # Lets this container resolve the Droplet's own network (not its own
+    # container loopback) as `host.docker.internal` -- needed to reach a
+    # self-hosted Valkey bound to the HOST's 127.0.0.1 (see VALKEY_URL in
+    # .env.production.example). Docker Desktop provides this DNS entry
+    # automatically; plain Linux Docker Engine (what a Droplet runs) needs
+    # it spelled out explicitly.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     command:
       - /bin/sh
@@ -94,6 +102,8 @@ services:
     volumes:
       - worker_storage:/app/storage
       - ${GOOGLE_APPLICATION_CREDENTIALS:?set path to your google-vision.json on this Droplet}:/run/secrets/google-vision.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     command:
       - /bin/sh
@@ -111,6 +121,8 @@ services:
     volumes:
       - beat_storage:/app/storage
       - ${GOOGLE_APPLICATION_CREDENTIALS:?set path to your google-vision.json on this Droplet}:/run/secrets/google-vision.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     command:
       - /bin/sh
