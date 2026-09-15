@@ -219,13 +219,22 @@ jobs:
             docker compose -f docker-compose.production.yml --env-file .env.production up -d worker
             docker image prune -f
 
+      # Checked from inside the Droplet, not from this runner -- the Cloud
+      # Firewall only allows 80/443 in (Caddy's ports), by design, so port
+      # 8000 (the container's own port, meant only for Caddy's internal
+      # reverse-proxy hop) was never reachable from the public internet.
       - name: Confirm the API is actually up
         if: steps.api.outputs.ips != ''
-        run: |
-          ip=$(echo "${{ steps.api.outputs.ips }}" | cut -d, -f1)
-          for i in $(seq 1 10); do
-            if curl -fsS "http://${ip}:8000/health"; then exit 0; fi
-            sleep 3
-          done
-          echo "API did not report healthy after deploy" >&2
-          exit 1
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ steps.api.outputs.ips }}
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            for i in $(seq 1 10); do
+              if curl -fsS "http://localhost:8000/health"; then exit 0; fi
+              sleep 3
+            done
+            echo "API did not report healthy after deploy" >&2
+            exit 1
