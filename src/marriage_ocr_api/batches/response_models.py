@@ -24,6 +24,12 @@ class BatchCreateRequest(BaseModel):
     description: str | None = None
 
 
+class BatchRenameRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"name": "Batch 1 (renamed)"}]})
+
+    name: str
+
+
 class BatchResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

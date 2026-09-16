@@ -31,6 +31,24 @@
         "title": "BatchCreateRequest",
         "type": "object"
       },
+      "BatchRenameRequest": {
+        "examples": [
+          {
+            "name": "Batch 1 (renamed)"
+          }
+        ],
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "BatchRenameRequest",
+        "type": "object"
+      },
       "BatchResponse": {
         "properties": {
           "completed_at": {
@@ -1547,6 +1565,62 @@
           }
         ],
         "summary": "Get One Batch",
+        "tags": [
+          "batches"
+        ]
+      },
+      "patch": {
+        "operationId": "rename_batch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchRenameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rename One Batch",
         "tags": [
           "batches"
         ]

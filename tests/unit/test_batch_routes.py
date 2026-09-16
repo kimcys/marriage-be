@@ -75,6 +75,22 @@ def test_create_and_list_batches(client: TestClient) -> None:
     assert payload["items"][0]["id"] == batch_id
 
 
+def test_rename_batch(client: TestClient) -> None:
+    batch_id = UUID(client.post("/api/v1/batches", json={"name": "Batch 1"}).json()["id"])
+
+    response = client.patch(f"/api/v1/batches/{batch_id}", json={"name": "Renamed batch"})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Renamed batch"
+    assert client.get(f"/api/v1/batches/{batch_id}").json()["name"] == "Renamed batch"
+
+
+def test_rename_missing_batch_returns_404(client: TestClient) -> None:
+    missing_id = "00000000-0000-0000-0000-000000000000"
+    response = client.patch(f"/api/v1/batches/{missing_id}", json={"name": "New name"})
+    assert response.status_code == 404
+
+
 def test_delete_batch_cascades_everything_and_removes_storage(
     client: TestClient, session: Session, tmp_path: Path
 ) -> None:

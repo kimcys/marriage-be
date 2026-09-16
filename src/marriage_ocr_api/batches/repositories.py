@@ -119,6 +119,16 @@ def get_batch(session: Session, batch_id: UUID) -> Batch | None:
     return session.get(Batch, batch_id)
 
 
+def rename_batch(session: Session, batch_id: UUID, name: str) -> Batch | None:
+    batch = session.get(Batch, batch_id)
+    if batch is None:
+        return None
+    batch.name = name
+    batch.updated_at = utcnow()
+    session.flush()
+    return batch
+
+
 def list_batches(session: Session, limit: int, offset: int) -> list[Batch]:
     stmt: Select[tuple[Batch]] = (
         select(Batch).order_by(Batch.created_at.desc(), Batch.id.desc()).limit(limit).offset(offset)

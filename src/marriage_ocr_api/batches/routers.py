@@ -9,8 +9,20 @@ from sqlalchemy.orm import Session
 from marriage_ocr_api.api.dependencies import get_db_session, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.auth.dependencies import require_admin
-from marriage_ocr_api.batches.repositories import count_batches, create_batch, get_batch, get_document, list_batches
-from marriage_ocr_api.batches.response_models import BatchCreateRequest, BatchResponse, PaginatedBatches
+from marriage_ocr_api.batches.repositories import (
+    count_batches,
+    create_batch,
+    get_batch,
+    get_document,
+    list_batches,
+    rename_batch,
+)
+from marriage_ocr_api.batches.response_models import (
+    BatchCreateRequest,
+    BatchRenameRequest,
+    BatchResponse,
+    PaginatedBatches,
+)
 from marriage_ocr_api.batches.service import build_document_download_response, cancel_batch_processing, delete_batch
 from marriage_ocr_api.core.config import Settings
 
@@ -68,6 +80,19 @@ def get_one_batch(batch_id: UUID, session: Session = Depends(get_db_session)) ->
     batch = get_batch(session, batch_id)
     if batch is None:
         raise _batch_not_found(batch_id)
+    return BatchResponse.model_validate(batch)
+
+
+@router.patch("/{batch_id}", response_model=BatchResponse, operation_id="rename_batch")
+def rename_one_batch(
+    batch_id: UUID,
+    payload: BatchRenameRequest,
+    session: Session = Depends(get_db_session),
+) -> BatchResponse:
+    batch = rename_batch(session, batch_id, payload.name)
+    if batch is None:
+        raise _batch_not_found(batch_id)
+    session.commit()
     return BatchResponse.model_validate(batch)
 
 
