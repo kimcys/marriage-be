@@ -152,7 +152,11 @@ def process_ocr_job(
                 # Push the result up so any API instance can serve
                 # /jobs/{id}/download -- the worker that produced it may not
                 # be the same node as the one handling that request.
-                get_storage_service(settings).put_file(output_path, output_relative_path)
+                get_storage_service(settings).put_file(
+                    output_path,
+                    output_relative_path,
+                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
             with session_factory() as session:
                 repositories.mark_completed(
                     session,

@@ -53,7 +53,7 @@ class LocalStorageService(StorageService):
         object.__setattr__(self, "root", self.root.resolve())
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def put_file(self, source: Path, key: str) -> StoredObject:
+    def put_file(self, source: Path, key: str, content_type: str | None = None) -> StoredObject:
         destination = _resolve_storage_path(self.root, key)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)

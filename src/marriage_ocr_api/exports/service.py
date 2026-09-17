@@ -84,6 +84,14 @@ def _export_filename(export_format: ExportFormat) -> str:
     return "records.csv" if export_format == ExportFormat.CSV else "records.xlsx"
 
 
+def _export_media_type(export_format: ExportFormat) -> str:
+    return (
+        "text/csv; charset=utf-8"
+        if export_format == ExportFormat.CSV
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
 def create_export_artifact(
     session: Session,
     settings: Settings,
@@ -110,7 +118,9 @@ def create_export_artifact(
                 write_csv_export(temp_path, rows=rows, columns=columns)
             else:
                 write_xlsx_export(temp_path, rows=rows, columns=columns)
-            stored = storage.put_file(temp_path, f"exports/{export.id}/{filename}")
+            stored = storage.put_file(
+                temp_path, f"exports/{export.id}/{filename}", content_type=_export_media_type(format)
+            )
         export.status = ExportStatus.COMPLETED.value
         export.storage_key = stored.key
         export.record_count = len(rows)
@@ -146,14 +156,9 @@ def build_export_download_response(export: Export, settings: Settings) -> FileRe
     file_path = settings.storage_root.resolve() / export.storage_key
     if not file_path.exists():
         raise FileNotFoundError("export file missing")
-    media_type = (
-        "text/csv; charset=utf-8"
-        if export.format == ExportFormat.CSV.value
-        else ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    )
     return FileResponse(
         path=file_path,
-        media_type=media_type,
+        media_type=_export_media_type(ExportFormat(export.format)),
         filename=_export_filename(ExportFormat(export.format)),
         headers={"X-Content-Type-Options": "nosniff"},
     )

@@ -56,8 +56,14 @@ class S3StorageService(StorageService):
         except ClientError:
             self._boto_client.create_bucket(Bucket=self.bucket_name)
 
-    def put_file(self, source: Path, key: str) -> StoredObject:
-        self._boto_client.upload_file(str(source), self.bucket_name, key)
+    def put_file(self, source: Path, key: str, content_type: str | None = None) -> StoredObject:
+        # boto3's upload_file no longer guesses Content-Type from the
+        # filename -- left unset, Spaces/S3 defaults every object to
+        # binary/octet-stream, which browsers always download rather than
+        # render inline (so a document "preview" -- opening the file in a
+        # new tab -- silently degrades to a forced download instead).
+        extra_args = {"ContentType": content_type} if content_type else None
+        self._boto_client.upload_file(str(source), self.bucket_name, key, ExtraArgs=extra_args)
         return StoredObject(key=key, path=None)
 
     def open_read(self, key: str) -> BinaryIO:

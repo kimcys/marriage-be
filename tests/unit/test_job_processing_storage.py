@@ -64,7 +64,7 @@ class FakeStorageService:
         destination.write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n")
         return destination
 
-    def put_file(self, source: Path, key: str):
+    def put_file(self, source: Path, key: str, content_type: str | None = None):
         self.put_file_calls.append((source, key))
 
 

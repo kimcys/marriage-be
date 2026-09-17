@@ -156,7 +156,9 @@ def _ingest_one_file(
         stored = save_local_file(source_path, paths, settings)
         if settings.storage_backend == "s3":
             local_path = settings.storage_root.resolve() / stored.input_relative_path
-            get_storage_service(settings).put_file(local_path, stored.input_relative_path)
+            get_storage_service(settings).put_file(
+                local_path, stored.input_relative_path, content_type=stored.content_type
+            )
 
         page_split_count = split_page_count(document_type, stored.content_type, paths.input_source_path)
         document = create_document(
