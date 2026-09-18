@@ -12,16 +12,15 @@ from sqlalchemy.pool import StaticPool
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.repositories import create_job
 from marriage_ocr_api.jobs.status import JobStatus
-from marriage_ocr_api.records.importer import import_records_from_xlsx
+from marriage_ocr_api.records.importer import EMPTY_FIELD_PLACEHOLDER, import_records_from_xlsx
 from marriage_ocr_api.records.models import RecordRevision
-from marriage_ocr_api.records.repositories import RecordNotFoundError, create_record, get_record
+from marriage_ocr_api.records.repositories import RecordNotFoundError, create_record, get_record, list_records
 from marriage_ocr_api.records.service import (
     RecordConflictError,
     apply_correction,
     approve_record,
     bulk_approve_records,
     delete_record,
-    reject_record,
 )
 from marriage_ocr_api.records.status import RecordStatus
 
@@ -81,6 +80,82 @@ def test_import_records_from_xlsx_is_idempotent(session: Session, tmp_path: Path
     assert created_second == 0
 
 
+def test_import_records_from_xlsx_fills_genuinely_empty_fields_with_placeholder(
+    session: Session, tmp_path: Path
+) -> None:
+    job_id = _job(session)
+    payload = tmp_path / "result.xlsx"
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.append(["full_name", "ic_number", "Confidence", "Missing Fields", "Source Record"])
+    # ic_number is genuinely blank in the source document -- high confidence,
+    # so this isn't an uncertain OCR read, just nothing there to read.
+    worksheet.append(["Ada Lovelace", None, 0.95, "ic_number", "record_001"])
+    workbook.save(payload)
+
+    import_records_from_xlsx(session, job_id, payload)
+    session.commit()
+
+    records = list_records(session, job_id=job_id, batch_id=None, status=None, limit=10, offset=0)
+    assert len(records) == 1
+    record = records[0]
+    # Auto-filled with the placeholder rather than left blank...
+    assert record.field_values["ic_number"] == EMPTY_FIELD_PLACEHOLDER
+    # ...and specifically because it's no longer "missing" -- confidence is
+    # high, so nothing here should force a reviewer to act on it.
+    assert record.missing_fields == []
+    assert record.status == RecordStatus.APPROVED.value
+
+
+def test_import_records_from_xlsx_flags_low_confidence_for_review(session: Session, tmp_path: Path) -> None:
+    job_id = _job(session)
+    payload = tmp_path / "result.xlsx"
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.append(["full_name", "ic_number", "Confidence", "Missing Fields", "Source Record"])
+    # Every field has a value, but Gemini itself was unsure about the read.
+    worksheet.append(["Ada Lovelace", "S1234567", 0.5, "", "record_001"])
+    workbook.save(payload)
+
+    import_records_from_xlsx(session, job_id, payload)
+    session.commit()
+
+    records = list_records(session, job_id=job_id, batch_id=None, status=None, limit=10, offset=0)
+    assert len(records) == 1
+    record = records[0]
+    assert record.missing_fields == []
+    assert record.status == RecordStatus.PENDING_REVIEW.value
+
+
+def test_apply_correction_keeps_low_confidence_record_pending_review(session: Session) -> None:
+    """Filling in the one field that was missing shouldn't auto-approve a
+    record the OCR extraction itself was unsure about -- that still needs an
+    explicit reviewer approve/reject, not just a value getting filled in."""
+    job_id = _job(session)
+    record = create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-1",
+        field_values={"full_name": "Ada Lovelace"},
+        confidence=0.5,
+        validation_issues=["Gemini uncertain fields: ic_number"],
+        missing_fields=["ic_number"],
+    )
+    session.commit()
+
+    updated = apply_correction(
+        session,
+        record.id,
+        expected_version=1,
+        field_values={"ic_number": "S1234567"},
+        reviewer="reviewer@example.com",
+        note="filled in from the source scan",
+    )
+
+    assert updated.missing_fields == []
+    assert updated.status == RecordStatus.PENDING_REVIEW.value
+
+
 def test_apply_correction_rejects_stale_version(session: Session) -> None:
     job_id = _job(session)
     record = create_record(
@@ -137,7 +212,7 @@ def test_delete_record_raises_for_missing_record(session: Session) -> None:
         delete_record(session, UUID("00000000-0000-0000-0000-000000000000"))
 
 
-def test_approve_and_reject_records(session: Session) -> None:
+def test_approve_record(session: Session) -> None:
     job_id = _job(session)
     first = create_record(
         session,
@@ -147,27 +222,11 @@ def test_approve_and_reject_records(session: Session) -> None:
         confidence=0.97,
         validation_issues=[],
     )
-    second = create_record(
-        session,
-        job_id=job_id,
-        source_key="page-1-row-2",
-        field_values={"full_name": "Grace Hopper"},
-        confidence=0.95,
-        validation_issues=[],
-    )
     session.commit()
 
     approved = approve_record(session, first.id, expected_version=1, reviewer="reviewer@example.com")
-    rejected = reject_record(
-        session,
-        second.id,
-        expected_version=1,
-        reviewer="reviewer@example.com",
-        reason="duplicate row",
-    )
 
     assert approved.status == RecordStatus.APPROVED.value
-    assert rejected.status == RecordStatus.REJECTED.value
 
 
 def test_bulk_approve_records(session: Session) -> None:

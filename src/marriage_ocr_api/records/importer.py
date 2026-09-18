@@ -33,6 +33,21 @@ _TYPED_METADATA_COLUMNS = {
     "Error Message",
 }
 
+# A field marriage-ocr genuinely couldn't fill in (blank in the source
+# document, or unreadable handwriting it was told to leave null rather than
+# guess) is filled with this placeholder instead of being left empty --
+# labeling it as "no information" doesn't need a reviewer's action the way an
+# uncertain-but-present value does, so it's deliberately kept out of
+# missing_fields below (see records/repositories.py::_initial_status_for --
+# review is now driven by low OCR confidence, not by field emptiness).
+EMPTY_FIELD_PLACEHOLDER = "TIADA MAKLUMAT"
+
+
+def _fill_empty_fields_with_placeholder(field_values: dict[str, object], missing_field_names: list[str]) -> None:
+    for field_name in missing_field_names:
+        if not str(field_values.get(field_name) or "").strip():
+            field_values[field_name] = EMPTY_FIELD_PLACEHOLDER
+
 
 def _is_metadata_column(name: str) -> bool:
     return name in _METADATA_COLUMNS or name.startswith("Raw ") or name.endswith(" Raw")
@@ -113,6 +128,7 @@ def import_records_from_xlsx(
                 source_key = f"row-{row_index}"
             confidence_raw = record.get("Confidence")
             confidence = float(confidence_raw) if isinstance(confidence_raw, int | float) else None
+            _fill_empty_fields_with_placeholder(field_values, _split_semicolon_list(record.get("Missing Fields")))
 
             if create_record_if_missing(
                 session,
@@ -126,7 +142,7 @@ def import_records_from_xlsx(
                     "field_values": field_values,
                     "confidence": confidence,
                     "validation_issues": _split_semicolon_list(record.get("Review Reason")),
-                    "missing_fields": _split_semicolon_list(record.get("Missing Fields")),
+                    "missing_fields": [],
                 },
             ):
                 created += 1
@@ -196,6 +212,11 @@ def import_records_from_csv(
             source_file = record.get("Source File")
             source_key = f"{source_file}" if source_file else f"row-{row_index}"
 
+            # Not given the same empty-field-placeholder + confidence-driven
+            # review treatment as the handwritten XLSX path below: the typed
+            # pipeline never has a numeric Confidence (always None), so
+            # dropping missing_fields here would leave no signal at all left
+            # to ever flag a typed record for review.
             if create_record_if_missing(
                 session,
                 job_id=job_id,

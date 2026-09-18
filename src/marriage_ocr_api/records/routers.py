@@ -38,7 +38,6 @@ from marriage_ocr_api.records.service import (
     approve_record,
     bulk_approve_records,
     delete_record,
-    reject_record,
 )
 from marriage_ocr_api.records.status import RecordStatus
 
@@ -203,32 +202,6 @@ def approve_one_record(
             expected_version=payload.version,
             reviewer=None,
             note=payload.reason,
-        )
-        session.commit()
-    except RecordNotFoundError as exc:
-        raise _not_found("OCR record not found.") from exc
-    except RecordConflictError as exc:
-        raise _conflict(str(exc)) from exc
-    return build_record_response(record, original_filename=get_document_filename(session, record.document_id))
-
-
-@router.post(
-    "/api/v1/records/{record_id}/reject",
-    response_model=RecordResponse,
-    operation_id="reject_record",
-)
-def reject_one_record(
-    record_id: UUID,
-    payload: RecordReviewRequest,
-    session: Session = Depends(get_db_session),
-) -> RecordResponse:
-    try:
-        record = reject_record(
-            session,
-            record_id,
-            expected_version=payload.version,
-            reviewer=None,
-            reason=payload.reason,
         )
         session.commit()
     except RecordNotFoundError as exc:

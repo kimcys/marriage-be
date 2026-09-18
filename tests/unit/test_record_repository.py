@@ -117,6 +117,45 @@ def test_create_record_with_missing_fields_starts_pending_review(session: Sessio
     assert fetched.missing_fields == ["ic_number"]
 
 
+def test_create_record_with_low_confidence_and_no_missing_fields_starts_pending_review(session: Session) -> None:
+    """Nothing is missing, but the OCR extraction itself was unsure -- still
+    needs a reviewer's eyes, same as an actually-missing field would."""
+    job_id = _job(session)
+    record = create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-1",
+        field_values={"full_name": "Ada Lovelace", "ic_number": "S1234567"},
+        confidence=0.5,
+        validation_issues=["Gemini uncertain fields: ic_number"],
+    )
+    session.commit()
+
+    fetched = get_record(session, record.id)
+    assert fetched is not None
+    assert fetched.status == RecordStatus.PENDING_REVIEW.value
+    assert fetched.missing_fields == []
+
+
+def test_create_record_with_confidence_at_threshold_is_approved(session: Session) -> None:
+    """0.70 itself is not "below" the threshold -- only strictly under it
+    should force review."""
+    job_id = _job(session)
+    record = create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-1",
+        field_values={"full_name": "Ada Lovelace"},
+        confidence=0.70,
+        validation_issues=[],
+    )
+    session.commit()
+
+    fetched = get_record(session, record.id)
+    assert fetched is not None
+    assert fetched.status == RecordStatus.APPROVED.value
+
+
 def test_list_records_filters_by_free_text_query(session: Session) -> None:
     job_id = _job(session)
     lovelace = create_record(

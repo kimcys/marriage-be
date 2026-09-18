@@ -12,7 +12,7 @@ from marriage_ocr_api.records.repositories import (
     append_revision,
     get_record_or_raise,
 )
-from marriage_ocr_api.records.status import RecordStatus
+from marriage_ocr_api.records.status import LOW_CONFIDENCE_THRESHOLD, RecordStatus
 
 
 def utcnow() -> datetime:
@@ -64,7 +64,8 @@ def apply_correction(
     record.missing_fields = [
         field for field in record.missing_fields if not str(merged_field_values.get(field) or "").strip()
     ]
-    resolved_status = RecordStatus.PENDING_REVIEW if record.missing_fields else RecordStatus.APPROVED
+    low_confidence = record.confidence is not None and record.confidence < LOW_CONFIDENCE_THRESHOLD
+    resolved_status = RecordStatus.PENDING_REVIEW if record.missing_fields or low_confidence else RecordStatus.APPROVED
     record.status = resolved_status.value
     record.review_status = resolved_status.value
     record.reviewed_by = reviewer
@@ -126,24 +127,6 @@ def approve_record(
     )
 
 
-def reject_record(
-    session: Session,
-    record_id: UUID,
-    *,
-    expected_version: int,
-    reviewer: str | None,
-    reason: str | None,
-) -> OCRRecord:
-    return _set_review_status(
-        session,
-        record_id,
-        expected_version=expected_version,
-        status=RecordStatus.REJECTED,
-        reviewer=reviewer,
-        note=reason,
-    )
-
-
 def bulk_approve_records(
     session: Session,
     record_ids: list[UUID],
@@ -171,5 +154,4 @@ __all__ = [
     "apply_correction",
     "bulk_approve_records",
     "delete_record",
-    "reject_record",
 ]

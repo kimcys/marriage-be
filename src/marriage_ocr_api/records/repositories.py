@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from marriage_ocr_api.batches.models import Document
 from marriage_ocr_api.onedrive.models import OneDriveSubmission
 from marriage_ocr_api.records.models import OCRRecord, RecordRevision
-from marriage_ocr_api.records.status import RecordStatus
+from marriage_ocr_api.records.status import LOW_CONFIDENCE_THRESHOLD, RecordStatus
 
 
 class RecordNotFoundError(RuntimeError):
@@ -44,14 +44,19 @@ def _get_record_by_key(
     return session.scalar(stmt)
 
 
-def _initial_status_for(missing_fields: list[str]) -> RecordStatus:
-    """A record with nothing missing needs no reviewer action at all --
-    APPROVED from the moment it's created. Only a record with at least one
-    flagged field starts PENDING_REVIEW, so the review queue only ever
-    surfaces records that actually need attention (see
-    records/service.py::apply_correction for the matching re-check when a
-    missing field is filled in)."""
-    return RecordStatus.PENDING_REVIEW if missing_fields else RecordStatus.APPROVED
+def _initial_status_for(missing_fields: list[str], confidence: float | None) -> RecordStatus:
+    """A record needs a reviewer's eyes for either of two independent
+    reasons: a field the importer couldn't even fill in (missing_fields --
+    genuinely empty fields are auto-filled with a placeholder before this is
+    called, see records/importer.py, so this only fires for a field that
+    still has none), or the OCR/Gemini extraction itself signaling low
+    confidence in what it read, even when every field has a value. A record
+    with neither problem needs no reviewer action at all -- APPROVED from
+    the moment it's created (see records/service.py::apply_correction for
+    the matching re-check when a missing field is filled in)."""
+    if missing_fields or (confidence is not None and confidence < LOW_CONFIDENCE_THRESHOLD):
+        return RecordStatus.PENDING_REVIEW
+    return RecordStatus.APPROVED
 
 
 def create_record(
@@ -88,7 +93,7 @@ def create_record(
         raise RecordConflictError(f"record {job_id}:{source_key} already exists")
 
     missing_fields = missing_fields or []
-    resolved_status = status if status is not None else _initial_status_for(missing_fields)
+    resolved_status = status if status is not None else _initial_status_for(missing_fields, confidence)
     resolved_review_status = review_status if review_status is not None else resolved_status.value
 
     now = utcnow()

@@ -180,7 +180,7 @@ def test_record_responses_include_the_source_document_filename(client: TestClien
 
 
 def test_record_routes_support_review_workflow(client: TestClient, session: Session) -> None:
-    first_id, second_id, third_id = _seed_records(session)
+    first_id, _second_id, third_id = _seed_records(session)
 
     list_response = client.get("/api/v1/records", params={"limit": 20, "offset": 0})
     assert list_response.status_code == 200
@@ -203,13 +203,6 @@ def test_record_routes_support_review_workflow(client: TestClient, session: Sess
     approve_response = client.post(f"/api/v1/records/{first_id}/approve", json={"version": 2})
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "APPROVED"
-
-    reject_response = client.post(
-        f"/api/v1/records/{second_id}/reject",
-        json={"version": 1, "reason": "duplicate row"},
-    )
-    assert reject_response.status_code == 200
-    assert reject_response.json()["status"] == "REJECTED"
 
     bulk_response = client.post("/api/v1/records/bulk-approve", json={"record_ids": [str(third_id)]})
     assert bulk_response.status_code == 200

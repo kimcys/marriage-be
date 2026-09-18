@@ -135,6 +135,46 @@
         "title": "BatchResponse",
         "type": "object"
       },
+      "BatchStatsResponse": {
+        "description": "Dashboard stat-card counts: total batches plus a breakdown by every\nBatchStatus value. `needs_attention` folds FAILED and CANCELLED together\n-- both mean a reviewer has to act on that batch, whereas the other\nstatuses (DRAFT/QUEUED/PROCESSING/REVIEW_REQUIRED/COMPLETED) don't.",
+        "properties": {
+          "by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/BatchStatus"
+            },
+            "title": "By Status",
+            "type": "object"
+          },
+          "completed": {
+            "title": "Completed",
+            "type": "integer"
+          },
+          "needs_attention": {
+            "title": "Needs Attention",
+            "type": "integer"
+          },
+          "processing": {
+            "title": "Processing",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "processing",
+          "completed",
+          "needs_attention",
+          "by_status"
+        ],
+        "title": "BatchStatsResponse",
+        "type": "object"
+      },
       "BatchStatus": {
         "enum": [
           "DRAFT",
@@ -1478,6 +1518,33 @@
           }
         ],
         "summary": "Create One Batch",
+        "tags": [
+          "batches"
+        ]
+      }
+    },
+    "/api/v1/batches/stats": {
+      "get": {
+        "description": "Dashboard stat-card counts, computed live from the current batches\ntable rather than cached -- cheap at this row count (one batch per\nintake, not per document/job/record) and always exactly in sync with\nthe table below it on the same page.",
+        "operationId": "get_batch_stats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchStatsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Batch Stats",
         "tags": [
           "batches"
         ]
