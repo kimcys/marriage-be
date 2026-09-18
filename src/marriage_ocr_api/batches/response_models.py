@@ -49,3 +49,16 @@ class PaginatedBatches(BaseModel):
     limit: int
     offset: int
     total: int
+
+
+class BatchStatsResponse(BaseModel):
+    """Dashboard stat-card counts: total batches plus a breakdown by every
+    BatchStatus value. `needs_attention` folds FAILED and CANCELLED together
+    -- both mean a reviewer has to act on that batch, whereas the other
+    statuses (DRAFT/QUEUED/PROCESSING/REVIEW_REQUIRED/COMPLETED) don't."""
+
+    total: int
+    processing: int
+    completed: int
+    needs_attention: int
+    by_status: dict[BatchStatus, int]

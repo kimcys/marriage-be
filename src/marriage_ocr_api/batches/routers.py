@@ -11,6 +11,7 @@ from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.auth.dependencies import require_admin
 from marriage_ocr_api.batches.repositories import (
     count_batches,
+    count_batches_by_status,
     create_batch,
     get_batch,
     get_document,
@@ -21,9 +22,11 @@ from marriage_ocr_api.batches.response_models import (
     BatchCreateRequest,
     BatchRenameRequest,
     BatchResponse,
+    BatchStatsResponse,
     PaginatedBatches,
 )
 from marriage_ocr_api.batches.service import build_document_download_response, cancel_batch_processing, delete_batch
+from marriage_ocr_api.batches.status import BatchStatus
 from marriage_ocr_api.core.config import Settings
 
 router = APIRouter(prefix="/api/v1/batches", tags=["batches"])
@@ -73,6 +76,23 @@ def list_all_batches(
 ) -> PaginatedBatches:
     items = [BatchResponse.model_validate(batch) for batch in list_batches(session, limit, offset)]
     return PaginatedBatches(items=items, limit=limit, offset=offset, total=count_batches(session))
+
+
+@router.get("/stats", response_model=BatchStatsResponse, operation_id="get_batch_stats")
+def get_batch_stats(session: Session = Depends(get_db_session)) -> BatchStatsResponse:
+    """Dashboard stat-card counts, computed live from the current batches
+    table rather than cached -- cheap at this row count (one batch per
+    intake, not per document/job/record) and always exactly in sync with
+    the table below it on the same page."""
+    by_status = count_batches_by_status(session)
+    needs_attention = by_status[BatchStatus.FAILED] + by_status[BatchStatus.CANCELLED]
+    return BatchStatsResponse(
+        total=sum(by_status.values()),
+        processing=by_status[BatchStatus.PROCESSING],
+        completed=by_status[BatchStatus.COMPLETED],
+        needs_attention=needs_attention,
+        by_status=by_status,
+    )
 
 
 @router.get("/{batch_id}", response_model=BatchResponse, operation_id="get_batch")

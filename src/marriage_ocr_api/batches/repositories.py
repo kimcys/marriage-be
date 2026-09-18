@@ -140,6 +140,18 @@ def count_batches(session: Session) -> int:
     return int(session.scalar(select(func.count()).select_from(Batch)) or 0)
 
 
+def count_batches_by_status(session: Session) -> dict[BatchStatus, int]:
+    """Every BatchStatus value mapped to how many batches currently hold it,
+    for the dashboard's per-status stat cards. Statuses with zero batches are
+    still included (as 0) so a caller never has to guess a missing key means
+    zero rather than "not computed yet"."""
+    counts = {status: 0 for status in BatchStatus}
+    rows = session.execute(select(Batch.status, func.count()).group_by(Batch.status)).all()
+    for status, count in rows:
+        counts[BatchStatus(status)] = int(count)
+    return counts
+
+
 def get_document(session: Session, document_id: UUID) -> Document | None:
     return session.get(Document, document_id)
 

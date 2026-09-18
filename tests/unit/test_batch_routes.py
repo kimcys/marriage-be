@@ -75,6 +75,45 @@ def test_create_and_list_batches(client: TestClient) -> None:
     assert payload["items"][0]["id"] == batch_id
 
 
+def test_batch_stats_counts_by_status(client: TestClient, session: Session) -> None:
+    draft_id = UUID(client.post("/api/v1/batches", json={"name": "Draft batch"}).json()["id"])
+    processing_id = UUID(client.post("/api/v1/batches", json={"name": "Processing batch"}).json()["id"])
+    completed_id = UUID(client.post("/api/v1/batches", json={"name": "Completed batch"}).json()["id"])
+    failed_id = UUID(client.post("/api/v1/batches", json={"name": "Failed batch"}).json()["id"])
+
+    get_batch(session, draft_id)  # left as DRAFT
+    get_batch(session, processing_id).status = "PROCESSING"
+    get_batch(session, completed_id).status = "COMPLETED"
+    get_batch(session, failed_id).status = "FAILED"
+    session.commit()
+
+    response = client.get("/api/v1/batches/stats")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 4
+    assert payload["processing"] == 1
+    assert payload["completed"] == 1
+    assert payload["needs_attention"] == 1
+    assert payload["by_status"]["DRAFT"] == 1
+    assert payload["by_status"]["PROCESSING"] == 1
+    assert payload["by_status"]["COMPLETED"] == 1
+    assert payload["by_status"]["FAILED"] == 1
+    assert payload["by_status"]["CANCELLED"] == 0
+
+
+def test_batch_stats_with_no_batches_returns_zeros(client: TestClient) -> None:
+    response = client.get("/api/v1/batches/stats")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 0
+    assert payload["processing"] == 0
+    assert payload["completed"] == 0
+    assert payload["needs_attention"] == 0
+    assert all(count == 0 for count in payload["by_status"].values())
+
+
 def test_rename_batch(client: TestClient) -> None:
     batch_id = UUID(client.post("/api/v1/batches", json={"name": "Batch 1"}).json()["id"])
 
