@@ -179,6 +179,56 @@ def test_record_responses_include_the_source_document_filename(client: TestClien
     assert patched.json()["original_filename"] == "01470625105782052009.pdf"
 
 
+def test_record_responses_follow_the_batchs_current_daerah_and_negeri(client: TestClient, session: Session) -> None:
+    job_id = UUID("123e4567-e89b-12d3-a456-426614175900")
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None, daerah="Klang", negeri="Selangor")
+    create_job(
+        session,
+        id=job_id,
+        batch_id=batch.id,
+        status=JobStatus.COMPLETED,
+        original_filename="register.pdf",
+        stored_filename="source.pdf",
+        content_type="application/pdf",
+        file_size_bytes=1,
+        input_relative_path="jobs/1/input/source.pdf",
+        output_relative_path="jobs/1/output/result.xlsx",
+        debug_relative_path="jobs/1/debug",
+        stdout_log_relative_path="jobs/1/logs/stdout.log",
+        stderr_log_relative_path="jobs/1/logs/stderr.log",
+        ocr_git_ref="abc123",
+    )
+    record = create_record(
+        session,
+        job_id=job_id,
+        batch_id=batch.id,
+        source_key="page-1-row-1",
+        field_values={"full_name": "Ada Lovelace"},
+        confidence=0.97,
+        validation_issues=[],
+    )
+    session.commit()
+
+    detail = client.get(f"/api/v1/records/{record.id}")
+    assert detail.json()["batch_daerah"] == "Klang"
+    assert detail.json()["batch_negeri"] == "Selangor"
+
+    listed = client.get("/api/v1/records", params={"batch_id": str(batch.id)})
+    assert listed.json()["items"][0]["batch_daerah"] == "Klang"
+    assert listed.json()["items"][0]["batch_negeri"] == "Selangor"
+
+    # Editing the batch's location afterward must be reflected immediately
+    # -- proves this is a live join, not a value copied onto the record at
+    # creation time.
+    rename_response = client.patch(
+        f"/api/v1/batches/{batch.id}", json={"name": "Batch 1", "daerah": "Sepang", "negeri": "Selangor"}
+    )
+    assert rename_response.status_code == 200
+
+    detail_after = client.get(f"/api/v1/records/{record.id}")
+    assert detail_after.json()["batch_daerah"] == "Sepang"
+
+
 def test_record_routes_support_review_workflow(client: TestClient, session: Session) -> None:
     first_id, _second_id, third_id = _seed_records(session)
 

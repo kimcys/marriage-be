@@ -105,3 +105,54 @@ def test_build_export_rows_merges_normalized_and_corrected_values(session: Sessi
         {"full_name": "Ada Byron", "confidence": 0.97},
         {"full_name": "Grace Hopper", "confidence": 0.95},
     ]
+
+
+def test_build_export_rows_leads_with_batch_daerah_and_negeri(session: Session) -> None:
+    batch = create_batch(
+        session, name="Batch 1", description=None, created_by=UUID(int=1), daerah="Petaling", negeri="Selangor"
+    )
+    document = create_document(
+        session,
+        batch_id=batch.id,
+        original_filename="register.pdf",
+        safe_filename="register.pdf",
+        media_type="application/pdf",
+        size_bytes=123,
+        sha256="abc123",
+        storage_key="batches/1/documents/1/input/register.pdf",
+    )
+    create_job(
+        session,
+        id=UUID(int=2),
+        batch_id=batch.id,
+        document_id=document.id,
+        status=JobStatus.COMPLETED,
+        original_filename="register.pdf",
+        stored_filename="source.pdf",
+        content_type="application/pdf",
+        file_size_bytes=123,
+        input_relative_path="jobs/1/input/source.pdf",
+        output_relative_path="jobs/1/output/result.xlsx",
+        debug_relative_path="jobs/1/debug",
+        stdout_log_relative_path="jobs/1/logs/stdout.log",
+        stderr_log_relative_path="jobs/1/logs/stderr.log",
+        ocr_git_ref="abc123",
+    )
+    create_record(
+        session,
+        job_id=UUID(int=2),
+        batch_id=batch.id,
+        document_id=document.id,
+        source_key="row-1",
+        field_values={"full_name": "Ada Lovelace"},
+        confidence=0.97,
+        validation_issues=[],
+        status=RecordStatus.APPROVED,
+        review_status="APPROVED",
+    )
+    session.commit()
+
+    columns, rows = build_export_rows(session, batch.id, include_unreviewed=False)
+
+    assert columns == ["Daerah", "Negeri", "full_name"]
+    assert rows == [{"Daerah": "Petaling", "Negeri": "Selangor", "full_name": "Ada Lovelace"}]

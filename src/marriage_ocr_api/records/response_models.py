@@ -40,6 +40,12 @@ class RecordResponse(BaseModel):
     # Resolved via a join in records/api.py, not a column on OCRRecord
     # itself, so it defaults to None wherever that join wasn't done.
     original_filename: str | None = None
+    # A record always follows its batch's *current* daerah/negeri -- also
+    # resolved via a join in records/api.py, never copied onto the record
+    # itself, so editing a batch's location later is reflected on every
+    # record under it immediately, not just future ones.
+    batch_daerah: str | None = None
+    batch_negeri: str | None = None
     reviewed_by: str | None
     reviewed_at: datetime | None
     version: int

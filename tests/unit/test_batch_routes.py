@@ -124,6 +124,32 @@ def test_rename_batch(client: TestClient) -> None:
     assert client.get(f"/api/v1/batches/{batch_id}").json()["name"] == "Renamed batch"
 
 
+def test_create_batch_with_daerah_and_negeri(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/batches", json={"name": "Batch 1", "daerah": "Petaling", "negeri": "Selangor"}
+    )
+
+    assert response.status_code == 201
+    assert response.json()["daerah"] == "Petaling"
+    assert response.json()["negeri"] == "Selangor"
+
+
+def test_update_batch_sets_daerah_and_negeri(client: TestClient) -> None:
+    batch_id = UUID(client.post("/api/v1/batches", json={"name": "Batch 1"}).json()["id"])
+
+    response = client.patch(
+        f"/api/v1/batches/{batch_id}",
+        json={"name": "Batch 1", "daerah": "Klang", "negeri": "Selangor"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["daerah"] == "Klang"
+    assert response.json()["negeri"] == "Selangor"
+    fetched = client.get(f"/api/v1/batches/{batch_id}").json()
+    assert fetched["daerah"] == "Klang"
+    assert fetched["negeri"] == "Selangor"
+
+
 def test_rename_missing_batch_returns_404(client: TestClient) -> None:
     missing_id = "00000000-0000-0000-0000-000000000000"
     response = client.patch(f"/api/v1/batches/{missing_id}", json={"name": "New name"})

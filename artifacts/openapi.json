@@ -9,6 +9,17 @@
           }
         ],
         "properties": {
+          "daerah": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daerah"
+          },
           "description": {
             "anyOf": [
               {
@@ -23,6 +34,17 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "negeri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negeri"
           }
         },
         "required": [
@@ -32,15 +54,38 @@
         "type": "object"
       },
       "BatchRenameRequest": {
+        "description": "PATCH /batches/{batch_id}'s payload -- a full replace of name/daerah/\nnegeri together (not a sparse merge), matching the frontend's combined\n\"edit batch\" form. daerah/negeri default to None so an old caller that\nonly ever sent {\"name\": ...} still validates.",
         "examples": [
           {
             "name": "Batch 1 (renamed)"
           }
         ],
         "properties": {
+          "daerah": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daerah"
+          },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "negeri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negeri"
           }
         },
         "required": [
@@ -80,6 +125,17 @@
             ],
             "title": "Created By"
           },
+          "daerah": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daerah"
+          },
           "description": {
             "anyOf": [
               {
@@ -99,6 +155,17 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "negeri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negeri"
           },
           "started_at": {
             "anyOf": [
@@ -125,6 +192,8 @@
           "id",
           "name",
           "description",
+          "daerah",
+          "negeri",
           "status",
           "created_by",
           "created_at",
@@ -1023,6 +1092,17 @@
       },
       "RecordResponse": {
         "properties": {
+          "batch_daerah": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Daerah"
+          },
           "batch_id": {
             "anyOf": [
               {
@@ -1034,6 +1114,17 @@
               }
             ],
             "title": "Batch Id"
+          },
+          "batch_negeri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Negeri"
           },
           "confidence": {
             "anyOf": [

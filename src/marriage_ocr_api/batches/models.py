@@ -20,6 +20,13 @@ class Batch(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # Free text, not an enum/FK -- daerah is only "covered" (has a known
+    # negeri to auto-populate) for Selangor today; other states' daerah
+    # lists live in the frontend's own lookup and grow independently of
+    # this column or a migration. negeri can also be set on its own with
+    # no daerah picked, for a state whose daerah list isn't covered yet.
+    daerah: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    negeri: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=BatchStatus.DRAFT.value, index=True)
     created_by: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

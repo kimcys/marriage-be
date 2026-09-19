@@ -22,12 +22,21 @@ class BatchCreateRequest(BaseModel):
 
     name: str
     description: str | None = None
+    daerah: str | None = None
+    negeri: str | None = None
 
 
 class BatchRenameRequest(BaseModel):
+    """PATCH /batches/{batch_id}'s payload -- a full replace of name/daerah/
+    negeri together (not a sparse merge), matching the frontend's combined
+    "edit batch" form. daerah/negeri default to None so an old caller that
+    only ever sent {"name": ...} still validates."""
+
     model_config = ConfigDict(json_schema_extra={"examples": [{"name": "Batch 1 (renamed)"}]})
 
     name: str
+    daerah: str | None = None
+    negeri: str | None = None
 
 
 class BatchResponse(BaseModel):
@@ -36,6 +45,8 @@ class BatchResponse(BaseModel):
     id: UUID
     name: str
     description: str | None
+    daerah: str | None
+    negeri: str | None
     status: BatchStatus
     created_by: UUID | None
     created_at: datetime

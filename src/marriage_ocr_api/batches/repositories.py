@@ -25,6 +25,8 @@ def create_batch(
     name: str,
     description: str | None,
     created_by: UUID | None,
+    daerah: str | None = None,
+    negeri: str | None = None,
     status: BatchStatus = BatchStatus.DRAFT,
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
@@ -35,6 +37,8 @@ def create_batch(
     batch = Batch(
         name=name,
         description=description,
+        daerah=daerah,
+        negeri=negeri,
         status=status.value,
         created_by=created_by,
         started_at=started_at,
@@ -119,14 +123,44 @@ def get_batch(session: Session, batch_id: UUID) -> Batch | None:
     return session.get(Batch, batch_id)
 
 
-def rename_batch(session: Session, batch_id: UUID, name: str) -> Batch | None:
+def rename_batch(
+    session: Session,
+    batch_id: UUID,
+    name: str,
+    *,
+    daerah: str | None = None,
+    negeri: str | None = None,
+) -> Batch | None:
     batch = session.get(Batch, batch_id)
     if batch is None:
         return None
     batch.name = name
+    batch.daerah = daerah
+    batch.negeri = negeri
     batch.updated_at = utcnow()
     session.flush()
     return batch
+
+
+def get_batch_location(session: Session, batch_id: UUID | None) -> tuple[str | None, str | None]:
+    """A record's daerah/negeri always follows its batch's *current* value
+    (see records/api.py) rather than a value copied onto the record at
+    OCR-import time -- editing a batch's location after the fact must be
+    reflected on every record under it, not just future ones."""
+    if batch_id is None:
+        return (None, None)
+    row = session.execute(select(Batch.daerah, Batch.negeri).where(Batch.id == batch_id)).first()
+    return (row.daerah, row.negeri) if row is not None else (None, None)
+
+
+def get_batch_locations(session: Session, batch_ids: set[UUID]) -> dict[UUID, tuple[str | None, str | None]]:
+    """Bulk form of get_batch_location for a page of records that can span
+    several batches (e.g. GET /records with no batch_id filter) -- avoids
+    one query per record, same reasoning as get_document_filenames."""
+    if not batch_ids:
+        return {}
+    rows = session.execute(select(Batch.id, Batch.daerah, Batch.negeri).where(Batch.id.in_(batch_ids)))
+    return {row.id: (row.daerah, row.negeri) for row in rows}
 
 
 def list_batches(session: Session, limit: int, offset: int) -> list[Batch]:

@@ -63,7 +63,14 @@ def create_one_batch(
     payload: BatchCreateRequest,
     session: Session = Depends(get_db_session),
 ) -> BatchResponse:
-    batch = create_batch(session, name=payload.name, description=payload.description, created_by=None)
+    batch = create_batch(
+        session,
+        name=payload.name,
+        description=payload.description,
+        created_by=None,
+        daerah=payload.daerah,
+        negeri=payload.negeri,
+    )
     session.commit()
     return BatchResponse.model_validate(batch)
 
@@ -109,7 +116,7 @@ def rename_one_batch(
     payload: BatchRenameRequest,
     session: Session = Depends(get_db_session),
 ) -> BatchResponse:
-    batch = rename_batch(session, batch_id, payload.name)
+    batch = rename_batch(session, batch_id, payload.name, daerah=payload.daerah, negeri=payload.negeri)
     if batch is None:
         raise _batch_not_found(batch_id)
     session.commit()

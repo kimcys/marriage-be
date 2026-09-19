@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from marriage_ocr_api.batches.models import Export
+from marriage_ocr_api.batches.models import Batch, Export
 from marriage_ocr_api.batches.repositories import create_export as create_export_record
 from marriage_ocr_api.batches.repositories import delete_export as delete_export_record
 from marriage_ocr_api.batches.repositories import list_stale_exports
@@ -48,6 +48,16 @@ def build_export_rows(
     batch_id: UUID,
     include_unreviewed: bool,
 ) -> tuple[list[str], list[dict[str, object]]]:
+    batch = session.get(Batch, batch_id)
+    # Leading columns on every row, ahead of the OCR'd business fields --
+    # a record always follows its batch's *current* daerah/negeri (same
+    # join records/api.py does for the API response), not a value copied in
+    # at import time. Omitted entirely for a batch with neither set, rather
+    # than exporting two always-blank columns.
+    location: dict[str, object] = {}
+    if batch is not None and (batch.daerah or batch.negeri):
+        location = {"Daerah": batch.daerah or "", "Negeri": batch.negeri or ""}
+
     stmt: Select[tuple[OCRRecord]] = select(OCRRecord).where(OCRRecord.batch_id == batch_id)
     stmt = stmt.order_by(
         OCRRecord.document_id.asc().nulls_last(),
@@ -62,7 +72,7 @@ def build_export_rows(
     for record in records:
         if not include_unreviewed and not _is_exportable(record):
             continue
-        effective = _effective_values(record)
+        effective = {**location, **_effective_values(record)}
         for key in effective:
             if key not in columns:
                 columns.append(key)
