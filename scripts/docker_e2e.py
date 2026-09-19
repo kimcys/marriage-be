@@ -46,6 +46,24 @@ def _wait_for_ready(client: httpx.Client, timeout_seconds: int = 120) -> dict[st
     raise RuntimeError(f"API never became ready: {last_error!r}")
 
 
+def _wait_for_onedrive_submission_fetched(
+    client: httpx.Client, batch_id: str, submission_id: str, timeout_seconds: int = 120
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/v1/batches/{batch_id}/onedrive-links")
+        response.raise_for_status()
+        for item in response.json().get("items", []):
+            if item["id"] != submission_id:
+                continue
+            if item["status"] == "FETCHED":
+                return item
+            if item["status"] == "FAILED":
+                raise RuntimeError(f"onedrive submission failed: {item!r}")
+        time.sleep(2)
+    raise RuntimeError("onedrive submission did not reach FETCHED in time")
+
+
 def _wait_for_job_completion(client: httpx.Client, timeout_seconds: int = 120) -> dict[str, object]:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -119,17 +137,19 @@ def main() -> int:
                 batch_response.raise_for_status()
                 batch_id = batch_response.json()["id"]
 
-                upload_response = client.post(
-                    f"/api/v1/batches/{batch_id}/documents",
-                    files={
-                        "file": (
-                            "register.pdf",
-                            b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n",
-                            "application/pdf",
-                        )
-                    },
+                # Real ingestion is OneDrive-link-only (see README's "Job
+                # Execution" section) -- there's no direct-upload endpoint
+                # any more. The fake OCR CLI's `onedrive fetch-public` and
+                # `classify` handlers (tests/fixtures/fake_ocr_cli.py) fake
+                # out the two subprocess calls this needs, so a placeholder
+                # URL works with no real OneDrive access from CI.
+                submission_response = client.post(
+                    f"/api/v1/batches/{batch_id}/onedrive-links",
+                    json={"url": "https://1drv.ms/f/s!docker-e2e-fake-link"},
                 )
-                upload_response.raise_for_status()
+                submission_response.raise_for_status()
+                submission_id = submission_response.json()["id"]
+                _wait_for_onedrive_submission_fetched(client, batch_id, submission_id)
 
                 job = _wait_for_job_completion(client)
                 assert job["status"] == "COMPLETED"

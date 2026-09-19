@@ -296,9 +296,7 @@ def _seed_skipped_file(engine, tmp_path: Path, submission_id: str, *, filename: 
         session.close()
 
 
-def test_classify_skipped_file_route_ingests_it_and_clears_the_chip(
-    client: TestClient, engine, tmp_path: Path
-) -> None:
+def test_classify_skipped_file_route_ingests_it_and_clears_the_chip(client: TestClient, engine, tmp_path: Path) -> None:
     batch_id = _create_batch(client)
     created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!skip"})
     submission_id = created.json()["id"]

@@ -106,12 +106,14 @@ jobs:
 
   docker-e2e:
     runs-on: ubuntu-latest
-    # Allowed to fail for now -- this smoke test still assumes a direct
-    # document-upload endpoint that no longer exists (real ingestion is
-    # OneDrive-link-only, which needs real network access CI doesn't have).
-    # Doesn't block `deploy` (see its `needs:` below) until the test itself
-    # is redesigned around the OneDrive-only ingestion flow.
-    continue-on-error: true
+    # Redesigned around the OneDrive-link-only ingestion flow: submits a
+    # placeholder OneDrive URL and lets the fake OCR CLI
+    # (tests/fixtures/fake_ocr_cli.py) fake both subprocess calls
+    # onedrive/runner.py::OneDriveFetchRunner needs (`onedrive fetch-public`
+    # and `classify`) -- no real OneDrive access or network fetch required.
+    # Blocks `deploy` (see its `needs:` below) again now that this actually
+    # exercises the real ingestion path instead of the removed direct-
+    # upload endpoint.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

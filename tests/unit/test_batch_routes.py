@@ -125,9 +125,7 @@ def test_rename_batch(client: TestClient) -> None:
 
 
 def test_create_batch_with_daerah_and_negeri(client: TestClient) -> None:
-    response = client.post(
-        "/api/v1/batches", json={"name": "Batch 1", "daerah": "Petaling", "negeri": "Selangor"}
-    )
+    response = client.post("/api/v1/batches", json={"name": "Batch 1", "daerah": "Petaling", "negeri": "Selangor"})
 
     assert response.status_code == 201
     assert response.json()["daerah"] == "Petaling"
