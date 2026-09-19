@@ -111,6 +111,24 @@ def _wait_for_export(client: httpx.Client, export_id: str, timeout_seconds: int 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
+
+    # docker-compose.yml bind-mounts ./storage:/app/storage, and the api/
+    # worker containers run as a non-root user (uid 10001, see Dockerfile).
+    # storage/ is gitignored, so a fresh CI checkout doesn't have it -- on
+    # Linux, `docker compose up` then auto-creates the missing bind-mount
+    # source directory as root:root, which the container's non-root user
+    # can't write to. /ready's storage check (health.py) fails against that
+    # permanently, so the api container never reports ready even though
+    # it's actually up and answering requests the whole time (confirmed via
+    # this script's own on-failure `docker compose logs` dump: repeated
+    # "GET /ready ... 503", not a connection error). Pre-creating it
+    # world-writable here sidesteps the ownership mismatch entirely; this
+    # doesn't affect a real deployment, where storage/ already exists with
+    # whatever permissions its own initial setup gave it.
+    storage_dir = repo_root / "storage"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    storage_dir.chmod(0o777)
+
     with tempfile.TemporaryDirectory(prefix="marriage-be-e2e-") as tmpdir:
         google_creds = Path(tmpdir) / "fake-google.json"
         google_creds.write_text("{}", encoding="utf-8")
