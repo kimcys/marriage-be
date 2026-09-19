@@ -1,0 +1,48 @@
+{
+  "error_id": "9fa4a7b3a3c1",
+  "timestamp": "2026-09-19T07:34:25",
+  "command_name": "process",
+  "argv": [
+    "/Users/hakimchica/Developments/Personal/marriage/marriage-ocr/src/marriage_ocr/cli.py",
+    "process",
+    "--input",
+    "/Users/hakimchica/Developments/Personal/marriage/marriage-be/storage/batches/5d00737d-4e5b-4ca3-a9f4-25b2d8488586/documents/71947ffc-d921-4cc6-94a7-5eacb77936de/input/source.jpg",
+    "--output",
+    "/Users/hakimchica/Developments/Personal/marriage/marriage-be/storage/batches/5d00737d-4e5b-4ca3-a9f4-25b2d8488586/documents/71947ffc-d921-4cc6-94a7-5eacb77936de/output/result.xlsx",
+    "--debug",
+    "/Users/hakimchica/Developments/Personal/marriage/marriage-be/storage/batches/5d00737d-4e5b-4ca3-a9f4-25b2d8488586/documents/71947ffc-d921-4cc6-94a7-5eacb77936de/debug",
+    "--config",
+    "/Users/hakimchica/Developments/Personal/marriage/marriage-ocr/config/handwritten.yaml",
+    "--reset-output"
+  ],
+  "cwd": "/Users/hakimchica/Developments/Personal/marriage/marriage-be",
+  "config_path": "/Users/hakimchica/Developments/Personal/marriage/marriage-ocr/config/handwritten.yaml",
+  "log_path": "logs/marriage-ocr-process-20260919-073425.log",
+  "python_version": "3.12.14 (main, Aug 12 2026, 13:57:54) [Clang 21.0.0 (clang-2100.1.1.101)]",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "exception": {
+    "type": "ValueError",
+    "message": "Failed to load image: /Users/hakimchica/Developments/Personal/marriage/marriage-be/storage/batches/5d00737d-4e5b-4ca3-a9f4-25b2d8488586/documents/71947ffc-d921-4cc6-94a7-5eacb77936de/input/source.jpg",
+    "traceback": [
+      "Traceback (most recent call last):\n",
+      "  File \"/Users/hakimchica/Developments/Personal/marriage/marriage-ocr/src/marriage_ocr/cli.py\", line 183, in process\n    result = process_input(\n             ^^^^^^^^^^^^^^\n",
+      "  File \"/Users/hakimchica/Developments/Personal/marriage/marriage-ocr/src/marriage_ocr/pipeline.py\", line 95, in process_input\n    return process_input_gemini_page(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "  File \"/Users/hakimchica/Developments/Personal/marriage/marriage-ocr/src/marriage_ocr/gemini_page_pipeline.py\", line 97, in process_input_gemini_page\n    pages = load_document_pages(\n            ^^^^^^^^^^^^^^^^^^^^\n",
+      "  File \"/Users/hakimchica/Developments/Personal/marriage/marriage-ocr/src/marriage_ocr/document_loader.py\", line 53, in load_document_pages\n    image=_load_raster_image(document_path),\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "  File \"/Users/hakimchica/Developments/Personal/marriage/marriage-ocr/src/marriage_ocr/document_loader.py\", line 101, in _load_raster_image\n    raise ValueError(f\"Failed to load image: {path}\")\n",
+      "ValueError: Failed to load image: /Users/hakimchica/Developments/Personal/marriage/marriage-be/storage/batches/5d00737d-4e5b-4ca3-a9f4-25b2d8488586/documents/71947ffc-d921-4cc6-94a7-5eacb77936de/input/source.jpg\n"
+    ]
+  },
+  "context": {
+    "input": "/Users/hakimchica/Developments/Personal/marriage/marriage-be/storage/batches/5d00737d-4e5b-4ca3-a9f4-25b2d8488586/documents/71947ffc-d921-4cc6-94a7-5eacb77936de/input/source.jpg",
+    "output": "/Users/hakimchica/Developments/Personal/marriage/marriage-be/storage/batches/5d00737d-4e5b-4ca3-a9f4-25b2d8488586/documents/71947ffc-d921-4cc6-94a7-5eacb77936de/output/result.xlsx",
+    "debug": "/Users/hakimchica/Developments/Personal/marriage/marriage-be/storage/batches/5d00737d-4e5b-4ca3-a9f4-25b2d8488586/documents/71947ffc-d921-4cc6-94a7-5eacb77936de/debug",
+    "reset_output": true,
+    "layout_only": false,
+    "skip_existing": false
+  },
+  "environment": {
+    "MARRIAGE_OCR_GIT_REF": "6faae7e755ac30733bbf81709965604d69725444",
+    "MARRIAGE_OCR_GIT_URL": "https://github.com/kimcys/marriage-ocr.git"
+  }
+}

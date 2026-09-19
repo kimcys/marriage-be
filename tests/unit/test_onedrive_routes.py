@@ -15,7 +15,7 @@ from marriage_ocr_api.auth.dependencies import require_user
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.main import create_app
-from marriage_ocr_api.onedrive.repositories import mark_failed
+from marriage_ocr_api.onedrive.repositories import mark_failed, mark_fetched
 
 
 class FakeOneDriveExecutor:
@@ -24,6 +24,14 @@ class FakeOneDriveExecutor:
 
     def submit(self, submission_id: UUID) -> None:
         self.submitted.append(submission_id)
+
+
+class FakeJobExecutor:
+    def __init__(self) -> None:
+        self.submitted: list[UUID] = []
+
+    def submit(self, job_id: UUID) -> None:
+        self.submitted.append(job_id)
 
 
 @pytest.fixture
@@ -50,7 +58,7 @@ def client(engine, tmp_path: Path) -> TestClient:
             db.close()
 
     app = create_app(Settings(storage_root=tmp_path))
-    app.state.executor = None
+    app.state.executor = FakeJobExecutor()
     app.state.onedrive_executor = FakeOneDriveExecutor()
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[require_user] = build_fake_admin_user
@@ -258,5 +266,85 @@ def test_delete_onedrive_link_scoped_to_the_wrong_batch_returns_404(client: Test
     submission_id = created.json()["id"]
 
     response = client.delete(f"/api/v1/batches/{other_batch_id}/onedrive-links/{submission_id}")
+
+    assert response.status_code == 404
+
+
+def _seed_skipped_file(engine, tmp_path: Path, submission_id: str, *, filename: str = "image00001.pdf") -> None:
+    """Mirrors what _record_skipped_file does during a real fetch+classify
+    run -- real bytes preserved on disk plus a matching skipped_files entry
+    -- since FakeOneDriveExecutor never actually runs the fetch itself."""
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    try:
+        skipped_dir = tmp_path / "onedrive" / submission_id / "skipped"
+        skipped_dir.mkdir(parents=True, exist_ok=True)
+        (skipped_dir / filename).write_bytes(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n")
+        mark_fetched(
+            session,
+            UUID(submission_id),
+            skipped_files=[
+                {
+                    "filename": filename,
+                    "status": "NEEDS_MANUAL_CLASSIFICATION",
+                    "storage_key": f"onedrive/{submission_id}/skipped/{filename}",
+                }
+            ],
+        )
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_classify_skipped_file_route_ingests_it_and_clears_the_chip(
+    client: TestClient, engine, tmp_path: Path
+) -> None:
+    batch_id = _create_batch(client)
+    created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!skip"})
+    submission_id = created.json()["id"]
+    _seed_skipped_file(engine, tmp_path, submission_id)
+
+    response = client.post(
+        f"/api/v1/batches/{batch_id}/onedrive-links/{submission_id}/skipped-files/classify",
+        json={"filename": "image00001.pdf", "document_type": "HANDWRITTEN_REGISTER"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["skipped_files"] is None
+    jobs_response = client.get("/api/v1/jobs", params={"batch_id": batch_id})
+    assert jobs_response.json()["total"] == 1
+    job_executor: FakeJobExecutor = client.app.state.executor
+    assert len(job_executor.submitted) == 1
+
+
+def test_classify_skipped_file_route_for_unknown_filename_returns_404(
+    client: TestClient, engine, tmp_path: Path
+) -> None:
+    batch_id = _create_batch(client)
+    created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!skip2"})
+    submission_id = created.json()["id"]
+    _seed_skipped_file(engine, tmp_path, submission_id)
+
+    response = client.post(
+        f"/api/v1/batches/{batch_id}/onedrive-links/{submission_id}/skipped-files/classify",
+        json={"filename": "does-not-exist.pdf", "document_type": "HANDWRITTEN_REGISTER"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_classify_skipped_file_route_scoped_to_the_wrong_batch_returns_404(
+    client: TestClient, engine, tmp_path: Path
+) -> None:
+    batch_id = _create_batch(client)
+    other_batch_id = _create_batch(client)
+    created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!skip3"})
+    submission_id = created.json()["id"]
+    _seed_skipped_file(engine, tmp_path, submission_id)
+
+    response = client.post(
+        f"/api/v1/batches/{other_batch_id}/onedrive-links/{submission_id}/skipped-files/classify",
+        json={"filename": "image00001.pdf", "document_type": "HANDWRITTEN_REGISTER"},
+    )
 
     assert response.status_code == 404

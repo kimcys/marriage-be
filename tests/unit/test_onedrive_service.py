@@ -15,11 +15,18 @@ from marriage_ocr_api.batches.status import DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base
 from marriage_ocr_api.db.repositories import list_jobs
-from marriage_ocr_api.onedrive.repositories import create_submission, get_submission, mark_failed, mark_fetching
+from marriage_ocr_api.onedrive.repositories import (
+    create_submission,
+    get_submission,
+    mark_failed,
+    mark_fetched,
+    mark_fetching,
+)
 from marriage_ocr_api.onedrive.runner import Classification, OneDriveFetchError
 from marriage_ocr_api.onedrive.service import (
     _apply_neighbor_fallback,
     _ingest_one_file,
+    classify_skipped_file,
     delete_submission,
     recover_stale_submissions,
     retry_submission,
@@ -213,7 +220,15 @@ def test_run_onedrive_fetch_skips_unroutable_files_without_creating_documents(tm
     check_session = session_factory()
     updated = get_submission(check_session, submission.id)
     assert updated.status == OneDriveSubmissionStatus.FETCHED.value
-    assert updated.skipped_files == [{"filename": "jawi.jpg", "status": "SKIPPED_JAWI"}]
+    expected_storage_key = f"onedrive/{submission.id}/skipped/jawi.jpg"
+    assert updated.skipped_files == [
+        {"filename": "jawi.jpg", "status": "SKIPPED_JAWI", "storage_key": expected_storage_key}
+    ]
+    # The bytes must actually survive run_onedrive_fetch's final
+    # shutil.rmtree of the download directory -- that's the whole point of
+    # moving them out to a sibling "skipped" directory instead of leaving
+    # them in "downloaded".
+    assert (tmp_path / expected_storage_key).read_bytes() == b"not-a-real-image"
     assert list_documents(check_session, batch.id, limit=10, offset=0) == []
     assert job_executor.submitted == []
     check_session.close()
@@ -553,6 +568,105 @@ def test_delete_submission_removes_only_its_own_documents_jobs_and_files(tmp_pat
     assert remaining_jobs == []
     assert not doc_a_dir.exists()
     assert doc_b_dir.exists()
+    session.close()
+
+
+def test_classify_skipped_file_ingests_it_as_a_normal_job(tmp_path: Path) -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!manual")
+    session.commit()
+    session.close()
+
+    settings = Settings(storage_root=tmp_path)
+    runner = FakeFetchRunner(
+        files={"image00001.pdf": _FAKE_PDF_BYTES},
+        classifications={"image00001.pdf": _UNKNOWN},
+    )
+    run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), runner)
+
+    session = session_factory()
+    fetched = get_submission(session, submission.id)
+    assert fetched.skipped_files is not None and len(fetched.skipped_files) == 1
+
+    job_executor = FakeJobExecutor()
+    result = classify_skipped_file(
+        session,
+        settings,
+        job_executor,
+        submission.id,
+        filename="image00001.pdf",
+        document_type=DocumentType.HANDWRITTEN_REGISTER,
+    )
+
+    assert result.skipped_files is None
+    documents = list_documents(session, batch.id, limit=10, offset=0)
+    assert len(documents) == 1
+    assert documents[0].document_type == DocumentType.HANDWRITTEN_REGISTER.value
+    assert len(job_executor.submitted) == 1
+    session.close()
+
+
+def test_classify_skipped_file_raises_when_submission_missing(tmp_path: Path) -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+
+    with pytest.raises(ApiError):
+        classify_skipped_file(
+            session,
+            Settings(storage_root=tmp_path),
+            FakeJobExecutor(),
+            UUID("00000000-0000-0000-0000-000000000000"),
+            filename="image00001.jpg",
+            document_type=DocumentType.HANDWRITTEN_REGISTER,
+        )
+    session.close()
+
+
+def test_classify_skipped_file_raises_when_filename_not_skipped(tmp_path: Path) -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!no-such-file")
+    session.commit()
+
+    with pytest.raises(ApiError):
+        classify_skipped_file(
+            session,
+            Settings(storage_root=tmp_path),
+            FakeJobExecutor(),
+            submission.id,
+            filename="does-not-exist.jpg",
+            document_type=DocumentType.HANDWRITTEN_REGISTER,
+        )
+    session.close()
+
+
+def test_classify_skipped_file_raises_when_bytes_no_longer_available(tmp_path: Path) -> None:
+    """A skipped_files entry recorded before this feature existed (or one
+    whose preservation move itself failed) has no storage_key -- nothing
+    left to classify."""
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!legacy-skip")
+    mark_fetched(session, submission.id, skipped_files=[{"filename": "old.jpg", "status": "SKIPPED_JAWI"}])
+    session.commit()
+
+    with pytest.raises(ApiError):
+        classify_skipped_file(
+            session,
+            Settings(storage_root=tmp_path),
+            FakeJobExecutor(),
+            submission.id,
+            filename="old.jpg",
+            document_type=DocumentType.HANDWRITTEN_REGISTER,
+        )
     session.close()
 
 

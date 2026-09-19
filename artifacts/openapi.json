@@ -1257,14 +1257,18 @@
       "RecordStatus": {
         "enum": [
           "PENDING_REVIEW",
-          "APPROVED",
-          "REJECTED"
+          "APPROVED"
         ],
         "title": "RecordStatus",
         "type": "string"
       },
       "SkippedFile": {
         "properties": {
+          "classifiable": {
+            "default": false,
+            "title": "Classifiable",
+            "type": "boolean"
+          },
           "filename": {
             "title": "Filename",
             "type": "string"
@@ -1279,6 +1283,29 @@
           "status"
         ],
         "title": "SkippedFile",
+        "type": "object"
+      },
+      "SkippedFileClassifyRequest": {
+        "examples": [
+          {
+            "document_type": "HANDWRITTEN_REGISTER",
+            "filename": "image00001.jpg"
+          }
+        ],
+        "properties": {
+          "document_type": {
+            "$ref": "#/components/schemas/DocumentType"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "document_type"
+        ],
+        "title": "SkippedFileClassifyRequest",
         "type": "object"
       },
       "TokenResponse": {
@@ -2038,6 +2065,84 @@
           }
         ],
         "summary": "Retry Onedrive Link",
+        "tags": [
+          "onedrive"
+        ]
+      }
+    },
+    "/api/v1/batches/{batch_id}/onedrive-links/{submission_id}/skipped-files/classify": {
+      "post": {
+        "description": "Lets a reviewer pick the document type for a file that came back\nNEEDS_MANUAL_CLASSIFICATION (or any other non-ROUTABLE skip reason) --\nthe auto-classifier's keyword-matching heuristic couldn't tell what it\nwas, but a human looking at it usually can. Routes it into the same\nDocument/Job pipeline every auto-classified file already goes through.",
+        "operationId": "classify_skipped_file",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Submission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "classify": {
+                  "summary": "Manually classify a file the auto-classifier couldn't route",
+                  "value": {
+                    "document_type": "HANDWRITTEN_REGISTER",
+                    "filename": "image00001.jpg"
+                  }
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/SkippedFileClassifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OneDriveSubmissionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Classify Skipped Onedrive File",
         "tags": [
           "onedrive"
         ]
@@ -3033,61 +3138,6 @@
           }
         ],
         "summary": "Approve One Record"
-      }
-    },
-    "/api/v1/records/{record_id}/reject": {
-      "post": {
-        "operationId": "reject_record",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "record_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Record Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RecordReviewRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RecordResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Reject One Record"
       }
     },
     "/api/v1/records/{record_id}/revisions": {

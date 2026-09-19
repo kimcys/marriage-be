@@ -7,20 +7,27 @@ from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from marriage_ocr_api.api.dependencies import get_db_session, get_onedrive_executor, settings_dependency
+from marriage_ocr_api.api.dependencies import (
+    get_db_session,
+    get_job_executor,
+    get_onedrive_executor,
+    settings_dependency,
+)
 from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.auth.dependencies import require_admin
 from marriage_ocr_api.batches.repositories import get_batch
 from marriage_ocr_api.core.config import Settings
+from marriage_ocr_api.jobs.service import JobExecutorProtocol
 from marriage_ocr_api.onedrive import repositories
 from marriage_ocr_api.onedrive.response_models import (
     OneDriveSubmissionResponse,
     PaginatedOneDriveSubmissions,
 )
-from marriage_ocr_api.onedrive.schemas import OneDriveLinkCreateRequest
+from marriage_ocr_api.onedrive.schemas import OneDriveLinkCreateRequest, SkippedFileClassifyRequest
 from marriage_ocr_api.onedrive.service import (
     OneDriveExecutorProtocol,
     build_submission_response,
+    classify_skipped_file,
     delete_submission,
     get_or_create_submission,
     retry_submission,
@@ -142,6 +149,57 @@ def retry_onedrive_link(
 
     submission = retry_submission(session, submission_id, executor)
     return build_submission_response(submission)
+
+
+@router.post(
+    "/{batch_id}/onedrive-links/{submission_id}/skipped-files/classify",
+    response_model=OneDriveSubmissionResponse,
+    operation_id="classify_skipped_file",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "classify": {
+                            "summary": "Manually classify a file the auto-classifier couldn't route",
+                            "value": {"filename": "image00001.jpg", "document_type": "HANDWRITTEN_REGISTER"},
+                        }
+                    }
+                }
+            }
+        }
+    },
+)
+def classify_skipped_onedrive_file(
+    batch_id: UUID,
+    submission_id: UUID,
+    payload: SkippedFileClassifyRequest,
+    session: Session = Depends(get_db_session),
+    settings: Settings = Depends(settings_dependency),
+    job_executor: JobExecutorProtocol = Depends(get_job_executor),
+) -> OneDriveSubmissionResponse:
+    """Lets a reviewer pick the document type for a file that came back
+    NEEDS_MANUAL_CLASSIFICATION (or any other non-ROUTABLE skip reason) --
+    the auto-classifier's keyword-matching heuristic couldn't tell what it
+    was, but a human looking at it usually can. Routes it into the same
+    Document/Job pipeline every auto-classified file already goes through.
+    """
+    batch = get_batch(session, batch_id)
+    if batch is None:
+        raise _batch_not_found(batch_id)
+
+    submission = repositories.get_submission(session, submission_id)
+    if submission is None or submission.batch_id != batch_id:
+        raise ApiError(404, "SUBMISSION_NOT_FOUND", f"OneDrive submission {submission_id} not found in this batch.")
+
+    return classify_skipped_file(
+        session,
+        settings,
+        job_executor,
+        submission_id,
+        filename=payload.filename,
+        document_type=payload.document_type,
+    )
 
 
 @router.delete(

@@ -79,6 +79,27 @@ def mark_fetched(
     return submission
 
 
+def get_skipped_file(session: Session, submission_id: UUID, filename: str) -> dict[str, str] | None:
+    submission = session.get(OneDriveSubmission, submission_id)
+    if submission is None or not submission.skipped_files:
+        return None
+    return next((item for item in submission.skipped_files if item.get("filename") == filename), None)
+
+
+def remove_skipped_file(session: Session, submission_id: UUID, filename: str) -> OneDriveSubmission:
+    """Drops one entry from skipped_files once classify_skipped_file has
+    turned it into a real Document/Job -- it's no longer "skipped", so its
+    chip should stop showing on the submission."""
+    submission = session.get(OneDriveSubmission, submission_id)
+    if submission is None:
+        raise ValueError(f"onedrive submission {submission_id} does not exist")
+    remaining = [item for item in (submission.skipped_files or []) if item.get("filename") != filename]
+    submission.skipped_files = remaining or None
+    submission.updated_at = utcnow()
+    session.flush()
+    return submission
+
+
 def mark_failed(
     session: Session,
     submission_id: UUID,

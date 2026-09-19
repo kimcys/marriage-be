@@ -110,7 +110,21 @@ def build_submission_response(submission: OneDriveSubmission) -> OneDriveSubmiss
             code=submission.error_code or "INTERNAL_ERROR",
             message=submission.error_message or "",
         )
-    skipped_files = [SkippedFile(**item) for item in submission.skipped_files] if submission.skipped_files else None
+    # `storage_key` (an internal on-disk path, see _record_skipped_file)
+    # never leaves the server -- the frontend only needs to know whether
+    # this file's bytes are still around to act on, not where.
+    skipped_files = (
+        [
+            SkippedFile(
+                filename=item["filename"],
+                status=item["status"],
+                classifiable=bool(item.get("storage_key")),
+            )
+            for item in submission.skipped_files
+        ]
+        if submission.skipped_files
+        else None
+    )
     return OneDriveSubmissionResponse(
         id=submission.id,
         batch_id=submission.batch_id,
@@ -254,6 +268,38 @@ def _ingest_one_file(
     return document_id
 
 
+def _skipped_files_dir(settings: Settings, submission_id: UUID) -> Path:
+    return settings.storage_root.resolve() / "onedrive" / str(submission_id) / "skipped"
+
+
+def _record_skipped_file(
+    settings: Settings,
+    submission_id: UUID,
+    skipped_files: list[dict[str, str]],
+    file_path: Path,
+    status: str,
+) -> None:
+    """Records a file classification/ingestion couldn't route, and -- unlike
+    before this existed -- preserves its bytes in durable per-submission
+    storage instead of leaving it in the temp download directory
+    run_onedrive_fetch wipes once the run finishes. Without this, only the
+    filename and status string would survive; nothing would be left for a
+    human to actually act on via classify_skipped_file (POST .../skipped-
+    files/classify) once NEEDS_MANUAL_CLASSIFICATION (or any other skip
+    reason) is reported.
+    """
+    entry: dict[str, str] = {"filename": file_path.name, "status": status}
+    try:
+        skipped_dir = _skipped_files_dir(settings, submission_id)
+        skipped_dir.mkdir(parents=True, exist_ok=True)
+        dest = skipped_dir / file_path.name
+        shutil.move(str(file_path), str(dest))
+        entry["storage_key"] = f"onedrive/{submission_id}/skipped/{file_path.name}"
+    except OSError:
+        logger.warning("could not preserve skipped file %s for submission %s", file_path, submission_id)
+    skipped_files.append(entry)
+
+
 def _apply_neighbor_fallback(
     classified: list[tuple[Path, Classification]],
 ) -> list[tuple[Path, Classification]]:
@@ -356,7 +402,7 @@ def run_onedrive_fetch(
                     classification = runner.classify(file_path)
                 except ClassifyError:
                     logger.exception("classify failed for %s (submission %s)", file_path, submission_id)
-                    skipped_files.append({"filename": file_path.name, "status": "CLASSIFY_FAILED"})
+                    _record_skipped_file(settings, submission_id, skipped_files, file_path, "CLASSIFY_FAILED")
                     continue
                 classified.append((file_path, classification))
 
@@ -364,13 +410,15 @@ def run_onedrive_fetch(
 
             for file_path, classification in classified:
                 if classification.status != "ROUTABLE" or classification.record_type is None:
-                    skipped_files.append({"filename": file_path.name, "status": classification.status})
+                    _record_skipped_file(settings, submission_id, skipped_files, file_path, classification.status)
                     continue
 
                 route_key = (classification.doc_type, classification.record_type, classification.layout_variant)
                 document_type = CLASSIFICATION_TO_DOCUMENT_TYPE.get(route_key)
                 if document_type is None:
-                    skipped_files.append({"filename": file_path.name, "status": "UNKNOWN_ROUTABLE_COMBINATION"})
+                    _record_skipped_file(
+                        settings, submission_id, skipped_files, file_path, "UNKNOWN_ROUTABLE_COMBINATION"
+                    )
                     continue
 
                 try:
@@ -384,10 +432,10 @@ def run_onedrive_fetch(
                         document_type=document_type,
                     )
                 except UploadValidationError as exc:
-                    skipped_files.append({"filename": file_path.name, "status": exc.code})
+                    _record_skipped_file(settings, submission_id, skipped_files, file_path, exc.code)
                 except Exception:
                     logger.exception("failed to ingest %s from onedrive submission %s", file_path, submission_id)
-                    skipped_files.append({"filename": file_path.name, "status": "INGEST_FAILED"})
+                    _record_skipped_file(settings, submission_id, skipped_files, file_path, "INGEST_FAILED")
 
             repositories.mark_fetched(session, submission_id, skipped_files=skipped_files)
             recompute_batch_status(session, batch_id)
@@ -443,6 +491,59 @@ def retry_submission(session: Session, submission_id: UUID, executor: OneDriveEx
         session.commit()
         raise ApiError(500, "INTERNAL_ERROR", "Failed to resubmit OneDrive submission.") from exc
     return submission
+
+
+def classify_skipped_file(
+    session: Session,
+    settings: Settings,
+    job_executor: JobExecutorProtocol,
+    submission_id: UUID,
+    *,
+    filename: str,
+    document_type: DocumentType,
+) -> OneDriveSubmissionResponse:
+    """A human's override for a file the auto-classifier couldn't route
+    (NEEDS_MANUAL_CLASSIFICATION and friends -- see _record_skipped_file):
+    ingests it through the exact same path a confidently-auto-classified
+    file already goes through (_ingest_one_file), just with the document
+    type supplied directly instead of looked up from triage.py's
+    keyword-matched guess. Raises ApiError for anything the caller should
+    see as a 4xx (missing submission/file, or bytes no longer available).
+    """
+    submission = repositories.get_submission(session, submission_id)
+    if submission is None:
+        raise ApiError(404, "SUBMISSION_NOT_FOUND", "OneDrive submission not found.")
+
+    entry = repositories.get_skipped_file(session, submission_id, filename)
+    if entry is None:
+        raise ApiError(404, "SKIPPED_FILE_NOT_FOUND", f"{filename} is not a skipped file on this submission.")
+
+    storage_key = entry.get("storage_key")
+    source_path = settings.storage_root.resolve() / storage_key if storage_key else None
+    if source_path is None or not source_path.is_file():
+        raise ApiError(
+            409,
+            "SKIPPED_FILE_UNAVAILABLE",
+            f"{filename}'s original file is no longer available and can't be classified.",
+        )
+
+    try:
+        _ingest_one_file(
+            session,
+            settings,
+            job_executor,
+            batch_id=submission.batch_id,
+            submission_id=submission_id,
+            source_path=source_path,
+            document_type=document_type,
+        )
+    except UploadValidationError as exc:
+        raise ApiError(exc.status_code, exc.code, exc.message) from exc
+
+    submission = repositories.remove_skipped_file(session, submission_id, filename)
+    recompute_batch_status(session, submission.batch_id)
+    session.commit()
+    return build_submission_response(submission)
 
 
 def delete_submission(session: Session, settings: Settings, submission_id: UUID) -> None:
