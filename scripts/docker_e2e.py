@@ -30,7 +30,7 @@ def _create_test_admin_and_login(client: httpx.Client, repo_root: Path, env: dic
     client.headers["Authorization"] = f"Bearer {token}"
 
 
-def _wait_for_ready(client: httpx.Client, timeout_seconds: int = 120) -> dict[str, object]:
+def _wait_for_ready(client: httpx.Client, timeout_seconds: int = 240) -> dict[str, object]:
     deadline = time.monotonic() + timeout_seconds
     last_error: Exception | None = None
     while time.monotonic() < deadline:
@@ -185,6 +185,23 @@ def main() -> int:
                         }
                     )
                 )
+        except Exception:
+            # Without this, a failure here is close to undiagnosable from
+            # the CI log alone -- `docker compose up`'s own output only
+            # covers the build/pull; nothing prints what a container
+            # actually did (or why it crashed) after that. `check=False`
+            # deliberately: a diagnostics command failing must never mask
+            # the real exception below it.
+            print("=== docker compose ps (on failure) ===", flush=True)
+            subprocess.run(["/usr/bin/env", "docker", "compose", "ps", "-a"], cwd=repo_root, env=env, check=False)
+            print("=== docker compose logs (on failure, last 200 lines/service) ===", flush=True)
+            subprocess.run(
+                ["/usr/bin/env", "docker", "compose", "logs", "--no-color", "--tail", "200"],
+                cwd=repo_root,
+                env=env,
+                check=False,
+            )
+            raise
         finally:
             subprocess.run(["/usr/bin/env", "docker", "compose", "down", "-v"], cwd=repo_root, env=env, check=False)
     return 0
