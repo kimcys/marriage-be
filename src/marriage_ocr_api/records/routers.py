@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session
 from marriage_ocr_api.api.dependencies import get_db_session
 from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.auth.dependencies import require_admin
-from marriage_ocr_api.batches.repositories import get_batch_location, get_batch_locations
+from marriage_ocr_api.batches.repositories import (
+    get_batch_location,
+    get_batch_locations,
+    list_distinct_batch_locations,
+)
 from marriage_ocr_api.records.api import (
     build_bulk_approve_response,
     build_record_response,
@@ -31,6 +35,8 @@ from marriage_ocr_api.records.response_models import (
     PaginatedRecordRevisions,
     PaginatedRecords,
     RecordCorrectionRequest,
+    RecordLocation,
+    RecordLocationsResponse,
     RecordResponse,
     RecordReviewRequest,
 )
@@ -60,6 +66,8 @@ def list_all_records(
     q: str | None = Query(default=None, description="Free-text search over the record's extracted field values"),
     source_url: str | None = Query(default=None, description="Filter to records from this OneDrive share link"),
     record_type: str | None = Query(default=None, description="Filter to this record type (NIKAH, CERAI, or RUJUK)"),
+    daerah: str | None = Query(default=None, description="Filter to records whose batch is in this daerah"),
+    negeri: str | None = Query(default=None, description="Filter to records whose batch is in this negeri"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
@@ -72,11 +80,21 @@ def list_all_records(
         q=q,
         source_url=source_url,
         record_type=record_type,
+        daerah=daerah,
+        negeri=negeri,
         limit=limit,
         offset=offset,
     )
     total = count_records(
-        session, job_id=None, batch_id=batch_id, status=status, q=q, source_url=source_url, record_type=record_type
+        session,
+        job_id=None,
+        batch_id=batch_id,
+        status=status,
+        q=q,
+        source_url=source_url,
+        record_type=record_type,
+        daerah=daerah,
+        negeri=negeri,
     )
     filenames = get_document_filenames(session, {item.document_id for item in items if item.document_id})
     batch_locations = get_batch_locations(session, {item.batch_id for item in items if item.batch_id})
@@ -101,6 +119,19 @@ def list_job_records(
     filenames = get_document_filenames(session, {item.document_id for item in items if item.document_id})
     batch_locations = get_batch_locations(session, {item.batch_id for item in items if item.batch_id})
     return build_records_page(items, limit, offset, total, filenames=filenames, batch_locations=batch_locations)
+
+
+@router.get(
+    "/api/v1/records/locations",
+    response_model=RecordLocationsResponse,
+    operation_id="list_record_locations",
+)
+def list_record_locations(session: Session = Depends(get_db_session)) -> RecordLocationsResponse:
+    """Declared before /records/{record_id} so "locations" isn't parsed as
+    a record id."""
+    return RecordLocationsResponse(
+        items=[RecordLocation(daerah=d, negeri=n) for d, n in list_distinct_batch_locations(session)]
+    )
 
 
 @router.get("/api/v1/records/{record_id}", response_model=RecordResponse, operation_id="get_record")

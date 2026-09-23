@@ -16,12 +16,17 @@ class OneDriveSubmissionError(BaseModel):
 class SkippedFile(BaseModel):
     filename: str
     status: str
-    # Present only when the original file's bytes were preserved (see
-    # onedrive/service.py::_record_skipped_file) -- absent for a skipped
-    # file recorded before this field existed, or if preserving it failed.
-    # Whether this is set is exactly what tells the frontend a "Classify"
-    # action is possible for this file at all.
+    # Whether "Classify" can be offered right now. Preserved bytes (see
+    # onedrive/service.py::_record_skipped_file) are used directly; without
+    # them the file is re-downloaded from the submission's link instead, so
+    # this is only false while that re-download is already in progress.
     classifiable: bool = False
+    # Set while (IN_PROGRESS) or after (FAILED) a background re-download of
+    # this one file from the submission's OneDrive link -- what "Classify"
+    # falls back to when the preserved bytes are gone (see
+    # onedrive/service.py::run_skipped_file_refetch).
+    refetch_status: str | None = None
+    refetch_error: str | None = None
 
 
 class OneDriveSubmissionResponse(BaseModel):

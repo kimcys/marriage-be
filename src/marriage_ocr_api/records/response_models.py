@@ -60,6 +60,15 @@ class PaginatedRecords(BaseModel):
     total: int
 
 
+class RecordLocation(BaseModel):
+    daerah: str | None
+    negeri: str | None
+
+
+class RecordLocationsResponse(BaseModel):
+    items: list[RecordLocation]
+
+
 class PaginatedRecordRevisions(BaseModel):
     items: list[RecordRevisionResponse]
     limit: int

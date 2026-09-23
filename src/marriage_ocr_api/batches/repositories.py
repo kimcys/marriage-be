@@ -163,6 +163,16 @@ def get_batch_locations(session: Session, batch_ids: set[UUID]) -> dict[UUID, tu
     return {row.id: (row.daerah, row.negeri) for row in rows}
 
 
+def list_distinct_batch_locations(session: Session) -> list[tuple[str | None, str | None]]:
+    """Every (daerah, negeri) pair any batch currently uses -- the option
+    lists for the records page's daerah/negeri filters, which are free text
+    on Batch (see models.py) rather than a closed enum."""
+    rows = session.execute(
+        select(Batch.daerah, Batch.negeri).where((Batch.daerah.is_not(None)) | (Batch.negeri.is_not(None))).distinct()
+    )
+    return [(row.daerah, row.negeri) for row in rows]
+
+
 def list_batches(session: Session, limit: int, offset: int) -> list[Batch]:
     stmt: Select[tuple[Batch]] = (
         select(Batch).order_by(Batch.created_at.desc(), Batch.id.desc()).limit(limit).offset(offset)

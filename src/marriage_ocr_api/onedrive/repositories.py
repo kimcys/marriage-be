@@ -86,11 +86,38 @@ def get_skipped_file(session: Session, submission_id: UUID, filename: str) -> di
     return next((item for item in submission.skipped_files if item.get("filename") == filename), None)
 
 
+def update_skipped_file(
+    session: Session, submission_id: UUID, filename: str, changes: dict[str, str | None]
+) -> OneDriveSubmission:
+    """Merges `changes` into one skipped_files entry (a None value drops that
+    key). Row-locked, like remove_skipped_file, so a background re-download
+    finishing for one file can't clobber another file's concurrent update
+    to the same JSON list."""
+    submission = session.get(OneDriveSubmission, submission_id, with_for_update=True, populate_existing=True)
+    if submission is None:
+        raise ValueError(f"onedrive submission {submission_id} does not exist")
+    updated = []
+    for item in submission.skipped_files or []:
+        if item.get("filename") == filename:
+            merged: dict[str, str | None] = {**item, **changes}
+            item = {key: value for key, value in merged.items() if value is not None}
+        updated.append(item)
+    submission.skipped_files = updated or None
+    submission.updated_at = utcnow()
+    session.flush()
+    return submission
+
+
+def list_submissions_with_skipped_files(session: Session) -> list[OneDriveSubmission]:
+    stmt = select(OneDriveSubmission).where(OneDriveSubmission.skipped_files.is_not(None))
+    return list(session.scalars(stmt))
+
+
 def remove_skipped_file(session: Session, submission_id: UUID, filename: str) -> OneDriveSubmission:
     """Drops one entry from skipped_files once classify_skipped_file has
     turned it into a real Document/Job -- it's no longer "skipped", so its
     chip should stop showing on the submission."""
-    submission = session.get(OneDriveSubmission, submission_id)
+    submission = session.get(OneDriveSubmission, submission_id, with_for_update=True, populate_existing=True)
     if submission is None:
         raise ValueError(f"onedrive submission {submission_id} does not exist")
     remaining = [item for item in (submission.skipped_files or []) if item.get("filename") != filename]

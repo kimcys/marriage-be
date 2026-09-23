@@ -21,16 +21,19 @@ from marriage_ocr_api.onedrive.repositories import (
     mark_failed,
     mark_fetched,
     mark_fetching,
+    update_skipped_file,
 )
 from marriage_ocr_api.onedrive.runner import Classification, OneDriveFetchError
 from marriage_ocr_api.onedrive.service import (
     _apply_neighbor_fallback,
     _ingest_one_file,
+    build_submission_response,
     classify_skipped_file,
     delete_submission,
     recover_stale_submissions,
     retry_submission,
     run_onedrive_fetch,
+    run_skipped_files_refetch,
 )
 from marriage_ocr_api.onedrive.status import OneDriveSubmissionStatus
 
@@ -60,12 +63,15 @@ class FakeFetchRunner:
         self._files = files
         self._classifications = classifications
         self.fetch_calls: list[tuple[str, Path]] = []
+        self.only_calls: list[list[str] | None] = []
 
-    def fetch_public(self, url: str, dest: Path) -> None:
+    def fetch_public(self, url: str, dest: Path, only: list[str] | None = None) -> None:
         self.fetch_calls.append((url, dest))
+        self.only_calls.append(only)
         dest.mkdir(parents=True, exist_ok=True)
         for filename, content in self._files.items():
-            (dest / filename).write_bytes(content)
+            if only is None or filename in only:
+                (dest / filename).write_bytes(content)
 
     def classify(self, file_path: Path) -> Classification:
         return self._classifications[file_path.name]
@@ -430,9 +436,13 @@ def test_run_onedrive_fetch_summarizes_a_long_rich_traceback_stderr(tmp_path: Pa
 class FakeOneDriveExecutor:
     def __init__(self) -> None:
         self.submitted: list[UUID] = []
+        self.refetched: list[UUID] = []
 
     def submit(self, submission_id: UUID) -> None:
         self.submitted.append(submission_id)
+
+    def submit_refetch(self, submission_id: UUID) -> None:
+        self.refetched.append(submission_id)
 
 
 class FailingOneDriveExecutor:
@@ -677,4 +687,213 @@ def test_delete_submission_for_missing_submission_raises(tmp_path: Path) -> None
 
     with pytest.raises(ApiError):
         delete_submission(session, Settings(storage_root=tmp_path), UUID("00000000-0000-0000-0000-000000000000"))
+    session.close()
+
+
+class _FakeObjectStorage:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def put_file(self, source: Path, key: str, content_type: str | None = None) -> None:
+        self.objects[key] = source.read_bytes()
+
+    def materialize(self, key: str, destination: Path) -> Path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(self.objects[key])
+        return destination
+
+    def delete(self, key: str) -> None:
+        self.objects.pop(key, None)
+
+
+def test_classify_skipped_file_under_s3_works_when_worker_and_api_have_separate_disks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production gives the worker (which records skipped files) and the API
+    (which classifies them) separate volumes -- the skipped bytes have to
+    round-trip through object storage."""
+    import marriage_ocr_api.onedrive.service as onedrive_service
+
+    storage = _FakeObjectStorage()
+    monkeypatch.setattr(onedrive_service, "get_storage_service", lambda _settings: storage)
+
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!split-disks")
+    session.commit()
+    session.close()
+
+    worker_settings = Settings(storage_root=tmp_path / "worker", storage_backend="s3")
+    runner = FakeFetchRunner(
+        files={"image00001.pdf": _FAKE_PDF_BYTES},
+        classifications={"image00001.pdf": _UNKNOWN},
+    )
+    run_onedrive_fetch(submission.id, worker_settings, session_factory, FakeJobExecutor(), runner)
+    skipped_key = f"onedrive/{submission.id}/skipped/image00001.pdf"
+    assert skipped_key in storage.objects
+
+    session = session_factory()
+    api_settings = Settings(storage_root=tmp_path / "api", storage_backend="s3")
+    job_executor = FakeJobExecutor()
+    result = classify_skipped_file(
+        session,
+        api_settings,
+        job_executor,
+        submission.id,
+        filename="image00001.pdf",
+        document_type=DocumentType.HANDWRITTEN_REGISTER,
+    )
+
+    assert result.skipped_files is None
+    assert len(list_documents(session, batch.id, limit=10, offset=0)) == 1
+    assert len(job_executor.submitted) == 1
+    assert skipped_key not in storage.objects
+    session.close()
+
+
+def _submission_with_lost_skipped_files(tmp_path: Path, filenames: list[str]):
+    """A FETCHED submission whose skipped files' preserved bytes are gone --
+    e.g. recorded on a worker disk the API can't see."""
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!lost-bytes")
+    mark_fetched(
+        session,
+        submission.id,
+        skipped_files=[
+            {
+                "filename": name,
+                "status": "NEEDS_MANUAL_CLASSIFICATION",
+                "storage_key": f"onedrive/{submission.id}/skipped/{name}",
+            }
+            for name in filenames
+        ],
+    )
+    session.commit()
+    return session_factory, session, batch, submission
+
+
+def test_classify_skipped_file_without_bytes_queues_a_single_file_refetch(tmp_path: Path) -> None:
+    session_factory, session, _batch, submission = _submission_with_lost_skipped_files(
+        tmp_path, ["image00001.pdf", "image00002.pdf"]
+    )
+    onedrive_executor = FakeOneDriveExecutor()
+
+    result = classify_skipped_file(
+        session,
+        Settings(storage_root=tmp_path),
+        FakeJobExecutor(),
+        submission.id,
+        filename="image00001.pdf",
+        document_type=DocumentType.HANDWRITTEN_REGISTER,
+        onedrive_executor=onedrive_executor,
+    )
+
+    assert onedrive_executor.refetched == [submission.id]
+    by_name = {item.filename: item for item in result.skipped_files or []}
+    assert by_name["image00001.pdf"].refetch_status == "QUEUED"
+    assert by_name["image00001.pdf"].classifiable is False
+    assert by_name["image00002.pdf"].refetch_status is None
+    assert by_name["image00002.pdf"].classifiable is True
+
+    with pytest.raises(ApiError):
+        classify_skipped_file(
+            session,
+            Settings(storage_root=tmp_path),
+            FakeJobExecutor(),
+            submission.id,
+            filename="image00001.pdf",
+            document_type=DocumentType.HANDWRITTEN_REGISTER,
+            onedrive_executor=onedrive_executor,
+        )
+    session.close()
+
+
+def test_run_skipped_files_refetch_downloads_only_the_queued_files(tmp_path: Path) -> None:
+    session_factory, session, batch, submission = _submission_with_lost_skipped_files(
+        tmp_path, ["image00001.pdf", "image00002.pdf"]
+    )
+    settings = Settings(storage_root=tmp_path)
+    classify_skipped_file(
+        session,
+        settings,
+        FakeJobExecutor(),
+        submission.id,
+        filename="image00001.pdf",
+        document_type=DocumentType.HANDWRITTEN_REGISTER,
+        onedrive_executor=FakeOneDriveExecutor(),
+    )
+    session.close()
+
+    runner = FakeFetchRunner(
+        files={"image00001.pdf": _FAKE_PDF_BYTES, "image00002.pdf": _FAKE_PDF_BYTES, "other.pdf": _FAKE_PDF_BYTES},
+        classifications={},
+    )
+    job_executor = FakeJobExecutor()
+    run_skipped_files_refetch(submission.id, settings, session_factory, job_executor, runner)
+
+    assert runner.only_calls == [["image00001.pdf"]]
+    session = session_factory()
+    refreshed = get_submission(session, submission.id)
+    assert [item["filename"] for item in refreshed.skipped_files] == ["image00002.pdf"]
+    documents = list_documents(session, batch.id, limit=10, offset=0)
+    assert [d.original_filename for d in documents] == ["image00001.pdf"]
+    assert documents[0].document_type == DocumentType.HANDWRITTEN_REGISTER.value
+    assert len(job_executor.submitted) == 1
+    assert not (tmp_path / "onedrive" / str(submission.id) / "refetch").exists() or not any(
+        (tmp_path / "onedrive" / str(submission.id) / "refetch").iterdir()
+    )
+    session.close()
+
+
+def test_run_skipped_files_refetch_marks_failed_when_file_left_the_link(tmp_path: Path) -> None:
+    session_factory, session, _batch, submission = _submission_with_lost_skipped_files(tmp_path, ["gone.pdf"])
+    settings = Settings(storage_root=tmp_path)
+    classify_skipped_file(
+        session,
+        settings,
+        FakeJobExecutor(),
+        submission.id,
+        filename="gone.pdf",
+        document_type=DocumentType.HANDWRITTEN_REGISTER,
+        onedrive_executor=FakeOneDriveExecutor(),
+    )
+    session.close()
+
+    run_skipped_files_refetch(
+        submission.id, settings, session_factory, FakeJobExecutor(), FakeFetchRunner(files={}, classifications={})
+    )
+
+    session = session_factory()
+    response = build_submission_response(get_submission(session, submission.id))
+    entry = (response.skipped_files or [])[0]
+    assert entry.refetch_status == "FAILED"
+    assert entry.refetch_error == "gone.pdf is no longer in the OneDrive link."
+    assert entry.classifiable is True
+    session.close()
+
+
+def test_recover_stale_submissions_releases_stuck_refetches(tmp_path: Path) -> None:
+    session_factory, session, _batch, submission = _submission_with_lost_skipped_files(tmp_path, ["stuck.pdf"])
+    update_skipped_file(
+        session,
+        submission.id,
+        "stuck.pdf",
+        {
+            "refetch_status": "IN_PROGRESS",
+            "refetch_document_type": "HANDWRITTEN_REGISTER",
+            "refetch_updated_at": (datetime.now(UTC) - timedelta(hours=10)).isoformat(),
+        },
+    )
+    session.commit()
+
+    assert recover_stale_submissions(session, stale_after_seconds=3600) == 1
+    session.commit()
+
+    entry = get_submission(session, submission.id).skipped_files[0]
+    assert entry["refetch_status"] == "FAILED"
     session.close()

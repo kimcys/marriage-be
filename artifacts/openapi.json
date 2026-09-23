@@ -1090,6 +1090,54 @@
         "title": "RecordCorrectionRequest",
         "type": "object"
       },
+      "RecordLocation": {
+        "properties": {
+          "daerah": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daerah"
+          },
+          "negeri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Negeri"
+          }
+        },
+        "required": [
+          "daerah",
+          "negeri"
+        ],
+        "title": "RecordLocation",
+        "type": "object"
+      },
+      "RecordLocationsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecordLocation"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "RecordLocationsResponse",
+        "type": "object"
+      },
       "RecordResponse": {
         "properties": {
           "batch_daerah": {
@@ -1363,6 +1411,28 @@
           "filename": {
             "title": "Filename",
             "type": "string"
+          },
+          "refetch_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refetch Error"
+          },
+          "refetch_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refetch Status"
           },
           "status": {
             "title": "Status",
@@ -2163,7 +2233,7 @@
     },
     "/api/v1/batches/{batch_id}/onedrive-links/{submission_id}/skipped-files/classify": {
       "post": {
-        "description": "Lets a reviewer pick the document type for a file that came back\nNEEDS_MANUAL_CLASSIFICATION (or any other non-ROUTABLE skip reason) --\nthe auto-classifier's keyword-matching heuristic couldn't tell what it\nwas, but a human looking at it usually can. Routes it into the same\nDocument/Job pipeline every auto-classified file already goes through.",
+        "description": "Lets a reviewer pick the document type for a file that came back\nNEEDS_MANUAL_CLASSIFICATION (or any other non-ROUTABLE skip reason) --\nthe auto-classifier's keyword-matching heuristic couldn't tell what it\nwas, but a human looking at it usually can. Routes it into the same\nDocument/Job pipeline every auto-classified file already goes through.\nIf the file's bytes are no longer on hand, just that file is queued to\nbe re-downloaded from the link and ingested in the background instead.",
         "operationId": "classify_skipped_file",
         "parameters": [
           {
@@ -2934,6 +3004,42 @@
             }
           },
           {
+            "description": "Filter to records whose batch is in this daerah",
+            "in": "query",
+            "name": "daerah",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to records whose batch is in this daerah",
+              "title": "Daerah"
+            }
+          },
+          {
+            "description": "Filter to records whose batch is in this negeri",
+            "in": "query",
+            "name": "negeri",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to records whose batch is in this negeri",
+              "title": "Negeri"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
@@ -3028,6 +3134,30 @@
           }
         ],
         "summary": "Bulk Approve"
+      }
+    },
+    "/api/v1/records/locations": {
+      "get": {
+        "description": "Declared before /records/{record_id} so \"locations\" isn't parsed as\na record id.",
+        "operationId": "list_record_locations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordLocationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Record Locations"
       }
     },
     "/api/v1/records/{record_id}": {

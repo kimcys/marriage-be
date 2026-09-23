@@ -21,9 +21,13 @@ from marriage_ocr_api.onedrive.repositories import mark_failed, mark_fetched
 class FakeOneDriveExecutor:
     def __init__(self) -> None:
         self.submitted: list[UUID] = []
+        self.refetched: list[UUID] = []
 
     def submit(self, submission_id: UUID) -> None:
         self.submitted.append(submission_id)
+
+    def submit_refetch(self, submission_id: UUID) -> None:
+        self.refetched.append(submission_id)
 
 
 class FakeJobExecutor:

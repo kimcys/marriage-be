@@ -9,7 +9,7 @@ from sqlalchemy import cast as sql_cast
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from marriage_ocr_api.batches.models import Document
+from marriage_ocr_api.batches.models import Batch, Document
 from marriage_ocr_api.onedrive.models import OneDriveSubmission
 from marriage_ocr_api.records.models import OCRRecord, RecordRevision
 from marriage_ocr_api.records.status import LOW_CONFIDENCE_THRESHOLD, RecordStatus
@@ -216,6 +216,8 @@ def _apply_record_filters[T: Select[Any]](
     q: str | None,
     source_url: str | None,
     record_type: str | None = None,
+    daerah: str | None = None,
+    negeri: str | None = None,
 ) -> T:
     if job_id is not None:
         stmt = stmt.where(OCRRecord.job_id == job_id)
@@ -250,6 +252,16 @@ def _apply_record_filters[T: Select[Any]](
             .join(OneDriveSubmission, Document.onedrive_submission_id == OneDriveSubmission.id)
             .where(OneDriveSubmission.url == source_url)
         )
+    if daerah or negeri:
+        # A record's location is always its batch's *current* daerah/negeri
+        # (same live join as RecordResponse.batch_daerah/batch_negeri), both
+        # free text on Batch -- so match case-insensitively, ignoring stray
+        # whitespace.
+        stmt = stmt.join(Batch, OCRRecord.batch_id == Batch.id)
+        if daerah:
+            stmt = stmt.where(func.lower(func.trim(Batch.daerah)) == daerah.strip().lower())
+        if negeri:
+            stmt = stmt.where(func.lower(func.trim(Batch.negeri)) == negeri.strip().lower())
     return stmt
 
 
@@ -262,12 +274,22 @@ def list_records(
     q: str | None = None,
     source_url: str | None = None,
     record_type: str | None = None,
+    daerah: str | None = None,
+    negeri: str | None = None,
     limit: int,
     offset: int,
 ) -> list[OCRRecord]:
     stmt: Select[tuple[OCRRecord]] = select(OCRRecord)
     stmt = _apply_record_filters(
-        stmt, job_id=job_id, batch_id=batch_id, status=status, q=q, source_url=source_url, record_type=record_type
+        stmt,
+        job_id=job_id,
+        batch_id=batch_id,
+        status=status,
+        q=q,
+        source_url=source_url,
+        record_type=record_type,
+        daerah=daerah,
+        negeri=negeri,
     )
     stmt = stmt.order_by(OCRRecord.created_at.desc(), OCRRecord.id.desc()).limit(limit).offset(offset)
     return list(session.scalars(stmt))
@@ -282,10 +304,20 @@ def count_records(
     q: str | None = None,
     source_url: str | None = None,
     record_type: str | None = None,
+    daerah: str | None = None,
+    negeri: str | None = None,
 ) -> int:
     stmt = select(func.count()).select_from(OCRRecord)
     stmt = _apply_record_filters(
-        stmt, job_id=job_id, batch_id=batch_id, status=status, q=q, source_url=source_url, record_type=record_type
+        stmt,
+        job_id=job_id,
+        batch_id=batch_id,
+        status=status,
+        q=q,
+        source_url=source_url,
+        record_type=record_type,
+        daerah=daerah,
+        negeri=negeri,
     )
     return int(session.scalar(stmt) or 0)
 

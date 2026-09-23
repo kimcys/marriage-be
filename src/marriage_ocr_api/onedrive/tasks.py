@@ -6,7 +6,11 @@ from uuid import UUID
 from marriage_ocr_api.core.config import get_settings
 from marriage_ocr_api.db.session import get_session_factory
 from marriage_ocr_api.jobs.celery_app import celery_app
-from marriage_ocr_api.onedrive.service import recover_stale_submissions, run_onedrive_fetch
+from marriage_ocr_api.onedrive.service import (
+    recover_stale_submissions,
+    run_onedrive_fetch,
+    run_skipped_files_refetch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,24 @@ def fetch_onedrive_submission(submission_id: str) -> None:
     # bespoke path specific to OneDrive ingestion.
     job_executor = CeleryJobExecutor()
     run_onedrive_fetch(UUID(submission_id), settings, session_factory, job_executor)
+
+
+@celery_app.task(
+    name="marriage_ocr_api.onedrive.refetch_skipped_files",
+    bind=False,
+    # Same budget as a full fetch: even an --only pull may have to walk a
+    # large share's whole folder tree (in a headless browser) to find them.
+    time_limit=_settings.onedrive_fetch_timeout_seconds + 60,
+    soft_time_limit=_settings.onedrive_fetch_timeout_seconds + 30,
+)
+def refetch_skipped_files(submission_id: str) -> None:
+    """Re-downloads just the QUEUED skipped files of one submission -- see
+    onedrive/service.py::run_skipped_files_refetch."""
+    from marriage_ocr_api.jobs.celery_executor import CeleryJobExecutor
+
+    settings = get_settings()
+    session_factory = get_session_factory(settings)
+    run_skipped_files_refetch(UUID(submission_id), settings, session_factory, CeleryJobExecutor())
 
 
 @celery_app.task(name="marriage_ocr_api.onedrive.recover_stale_submissions", bind=False)

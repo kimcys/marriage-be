@@ -394,3 +394,56 @@ def test_record_routes_return_conflicts_as_api_errors(client: TestClient, sessio
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "RECORD_CONFLICT"
+
+
+def test_list_records_filters_by_batch_daerah_and_negeri(client: TestClient, session: Session) -> None:
+    locations = [("Klang", "Selangor"), ("Sepang", "Selangor"), (None, "Johor")]
+    record_ids = []
+    for index, (daerah, negeri) in enumerate(locations):
+        batch = create_batch(
+            session, name=f"Batch {index}", description=None, created_by=None, daerah=daerah, negeri=negeri
+        )
+        job_id = UUID(f"123e4567-e89b-12d3-a456-42661418000{index}")
+        create_job(
+            session,
+            id=job_id,
+            batch_id=batch.id,
+            status=JobStatus.COMPLETED,
+            original_filename="register.pdf",
+            stored_filename="source.pdf",
+            content_type="application/pdf",
+            file_size_bytes=1,
+            input_relative_path=f"jobs/{index}/input/source.pdf",
+            output_relative_path=f"jobs/{index}/output/result.xlsx",
+            debug_relative_path=f"jobs/{index}/debug",
+            stdout_log_relative_path=f"jobs/{index}/logs/stdout.log",
+            stderr_log_relative_path=f"jobs/{index}/logs/stderr.log",
+            ocr_git_ref="abc123",
+        )
+        record = create_record(
+            session,
+            job_id=job_id,
+            batch_id=batch.id,
+            source_key="page-1-row-1",
+            field_values={"full_name": f"Person {index}"},
+            confidence=0.97,
+            validation_issues=[],
+        )
+        record_ids.append(str(record.id))
+    session.commit()
+
+    by_negeri = client.get("/api/v1/records", params={"negeri": "selangor"})
+    assert by_negeri.status_code == 200
+    assert by_negeri.json()["total"] == 2
+    assert {item["id"] for item in by_negeri.json()["items"]} == set(record_ids[:2])
+
+    by_both = client.get("/api/v1/records", params={"negeri": "Selangor", "daerah": "Sepang"})
+    assert [item["id"] for item in by_both.json()["items"]] == [record_ids[1]]
+
+    locations_response = client.get("/api/v1/records/locations")
+    assert locations_response.status_code == 200
+    assert sorted((item["daerah"] or "", item["negeri"] or "") for item in locations_response.json()["items"]) == [
+        ("", "Johor"),
+        ("Klang", "Selangor"),
+        ("Sepang", "Selangor"),
+    ]

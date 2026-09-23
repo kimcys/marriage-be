@@ -70,6 +70,19 @@ def _summarize_error_text(raw: str, limit: int) -> str:
 class OneDriveExecutorProtocol(Protocol):
     def submit(self, submission_id: UUID) -> object: ...
 
+    def submit_refetch(self, submission_id: UUID) -> object: ...
+
+
+# skipped_files entry keys for a missing file being re-downloaded on its own
+# (see classify_skipped_file / run_skipped_files_refetch).
+_REFETCH_STATUS = "refetch_status"
+_REFETCH_DOCUMENT_TYPE = "refetch_document_type"
+_REFETCH_ERROR = "refetch_error"
+_REFETCH_UPDATED_AT = "refetch_updated_at"
+_REFETCH_QUEUED = "QUEUED"
+_REFETCH_IN_PROGRESS = "IN_PROGRESS"
+_REFETCH_FAILED = "FAILED"
+
 
 class SessionFactory(Protocol):
     def __call__(self) -> Session: ...
@@ -118,7 +131,9 @@ def build_submission_response(submission: OneDriveSubmission) -> OneDriveSubmiss
             SkippedFile(
                 filename=item["filename"],
                 status=item["status"],
-                classifiable=bool(item.get("storage_key")),
+                classifiable=item.get(_REFETCH_STATUS) not in (_REFETCH_QUEUED, _REFETCH_IN_PROGRESS),
+                refetch_status=item.get(_REFETCH_STATUS),
+                refetch_error=item.get(_REFETCH_ERROR),
             )
             for item in submission.skipped_files
         ]
@@ -294,9 +309,16 @@ def _record_skipped_file(
         skipped_dir.mkdir(parents=True, exist_ok=True)
         dest = skipped_dir / file_path.name
         shutil.move(str(file_path), str(dest))
-        entry["storage_key"] = f"onedrive/{submission_id}/skipped/{file_path.name}"
-    except OSError:
-        logger.warning("could not preserve skipped file %s for submission %s", file_path, submission_id)
+        storage_key = f"onedrive/{submission_id}/skipped/{file_path.name}"
+        # Under STORAGE_BACKEND=s3 the worker (which runs this) and the API
+        # (which later serves classify_skipped_file) don't share a disk --
+        # production gives each its own volume -- so the bytes must also go
+        # to object storage or the API will never find them.
+        if settings.storage_backend == "s3":
+            get_storage_service(settings).put_file(dest, storage_key)
+        entry["storage_key"] = storage_key
+    except Exception:
+        logger.warning("could not preserve skipped file %s for submission %s", file_path, submission_id, exc_info=True)
     skipped_files.append(entry)
 
 
@@ -459,7 +481,34 @@ def recover_stale_submissions(session: Session, stale_after_seconds: float) -> i
     onedrive/repositories.py::fail_stale_fetching_submissions.
     """
     failed = repositories.fail_stale_fetching_submissions(session, _utcnow(), stale_after_seconds)
-    return len(failed)
+    return len(failed) + _fail_stale_refetches(session, stale_after_seconds)
+
+
+def _fail_stale_refetches(session: Session, stale_after_seconds: float) -> int:
+    """A skipped file left QUEUED/IN_PROGRESS by a re-download whose worker
+    died would otherwise keep its Classify button disabled forever -- mark
+    it FAILED so a reviewer can click Classify again."""
+    now = _utcnow()
+    recovered = 0
+    for submission in repositories.list_submissions_with_skipped_files(session):
+        for item in list(submission.skipped_files or []):
+            if item.get(_REFETCH_STATUS) not in (_REFETCH_QUEUED, _REFETCH_IN_PROGRESS):
+                continue
+            updated_at = item.get(_REFETCH_UPDATED_AT)
+            if updated_at and (now - datetime.fromisoformat(updated_at)).total_seconds() < stale_after_seconds:
+                continue
+            repositories.update_skipped_file(
+                session,
+                submission.id,
+                item["filename"],
+                {
+                    _REFETCH_STATUS: _REFETCH_FAILED,
+                    _REFETCH_DOCUMENT_TYPE: None,
+                    _REFETCH_ERROR: "The re-download was interrupted. Click Classify to try again.",
+                },
+            )
+            recovered += 1
+    return recovered
 
 
 def retry_submission(session: Session, submission_id: UUID, executor: OneDriveExecutorProtocol) -> OneDriveSubmission:
@@ -501,6 +550,7 @@ def classify_skipped_file(
     *,
     filename: str,
     document_type: DocumentType,
+    onedrive_executor: OneDriveExecutorProtocol | None = None,
 ) -> OneDriveSubmissionResponse:
     """A human's override for a file the auto-classifier couldn't route
     (NEEDS_MANUAL_CLASSIFICATION and friends -- see _record_skipped_file):
@@ -509,6 +559,14 @@ def classify_skipped_file(
     type supplied directly instead of looked up from triage.py's
     keyword-matched guess. Raises ApiError for anything the caller should
     see as a 4xx (missing submission/file, or bytes no longer available).
+
+    When the preserved bytes are gone (recorded before they were kept in
+    object storage, or lost with a worker's disk), and an
+    `onedrive_executor` is given, the file is instead queued to be
+    re-downloaded -- on its own, not the whole share -- from the
+    submission's link and ingested as `document_type` in the background
+    (run_skipped_files_refetch). The returned entry then shows
+    refetch_status=QUEUED until that finishes.
     """
     submission = repositories.get_submission(session, submission_id)
     if submission is None:
@@ -520,6 +578,15 @@ def classify_skipped_file(
 
     storage_key = entry.get("storage_key")
     source_path = settings.storage_root.resolve() / storage_key if storage_key else None
+    if storage_key and source_path is not None and not source_path.is_file() and settings.storage_backend == "s3":
+        # Preserved by the worker on its own disk; fetch the object-storage
+        # copy (see _record_skipped_file) onto this process's disk.
+        with contextlib.suppress(Exception):
+            get_storage_service(settings).materialize(storage_key, source_path)
+    if entry.get(_REFETCH_STATUS) in (_REFETCH_QUEUED, _REFETCH_IN_PROGRESS):
+        raise ApiError(409, "SKIPPED_FILE_REFETCHING", f"{filename} is already being re-downloaded from OneDrive.")
+    if (source_path is None or not source_path.is_file()) and onedrive_executor is not None:
+        return _queue_skipped_file_refetch(session, onedrive_executor, submission_id, filename, document_type)
     if source_path is None or not source_path.is_file():
         raise ApiError(
             409,
@@ -543,7 +610,174 @@ def classify_skipped_file(
     submission = repositories.remove_skipped_file(session, submission_id, filename)
     recompute_batch_status(session, submission.batch_id)
     session.commit()
+    if storage_key and settings.storage_backend == "s3":
+        with contextlib.suppress(Exception):
+            get_storage_service(settings).delete(storage_key)
     return build_submission_response(submission)
+
+
+def _queue_skipped_file_refetch(
+    session: Session,
+    onedrive_executor: OneDriveExecutorProtocol,
+    submission_id: UUID,
+    filename: str,
+    document_type: DocumentType,
+) -> OneDriveSubmissionResponse:
+    submission = repositories.update_skipped_file(
+        session,
+        submission_id,
+        filename,
+        {
+            _REFETCH_STATUS: _REFETCH_QUEUED,
+            _REFETCH_DOCUMENT_TYPE: document_type.value,
+            _REFETCH_ERROR: None,
+            _REFETCH_UPDATED_AT: _utcnow().isoformat(),
+        },
+    )
+    session.commit()
+    try:
+        onedrive_executor.submit_refetch(submission_id)
+    except Exception as exc:
+        repositories.update_skipped_file(
+            session,
+            submission_id,
+            filename,
+            {
+                _REFETCH_STATUS: _REFETCH_FAILED,
+                _REFETCH_DOCUMENT_TYPE: None,
+                _REFETCH_ERROR: "The re-download could not be queued for background processing.",
+            },
+        )
+        session.commit()
+        raise ApiError(500, "INTERNAL_ERROR", f"Failed to queue {filename} for re-download.") from exc
+    logger.info("queued %s of onedrive submission %s for re-download", filename, submission_id)
+    return build_submission_response(submission)
+
+
+def _set_refetch_failed(
+    session_factory: sessionmaker[Session] | SessionFactory,
+    submission_id: UUID,
+    filenames: list[str],
+    message: str,
+) -> None:
+    with session_factory() as session:
+        try:
+            for filename in filenames:
+                repositories.update_skipped_file(
+                    session,
+                    submission_id,
+                    filename,
+                    {_REFETCH_STATUS: _REFETCH_FAILED, _REFETCH_DOCUMENT_TYPE: None, _REFETCH_ERROR: message},
+                )
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception("failed to record re-download failure for onedrive submission %s", submission_id)
+
+
+def run_skipped_files_refetch(
+    submission_id: UUID,
+    settings: Settings,
+    session_factory: sessionmaker[Session] | SessionFactory,
+    job_executor: JobExecutorProtocol,
+    runner: OneDriveFetchRunner | None = None,
+) -> None:
+    """Background half of classify_skipped_file's re-download fallback:
+    claims every QUEUED skipped file on the submission, downloads *only
+    those* from its OneDrive link (marriage-ocr's `fetch-public --only`),
+    and ingests each as the document type the reviewer picked -- the same
+    _ingest_one_file path any other file takes. Files queued while this
+    runs are left QUEUED for the task their own click submitted.
+    """
+    runner = runner or OneDriveFetchRunner(settings)
+    dest_dir = settings.storage_root.resolve() / "onedrive" / str(submission_id) / "refetch" / uuid4().hex
+    claimed: dict[str, DocumentType] = {}
+    try:
+        with session_factory() as session:
+            submission = repositories.get_submission(session, submission_id)
+            if submission is None:
+                return
+            url = submission.url
+            for item in submission.skipped_files or []:
+                if item.get(_REFETCH_STATUS) == _REFETCH_QUEUED and item.get(_REFETCH_DOCUMENT_TYPE):
+                    claimed[item["filename"]] = DocumentType(item[_REFETCH_DOCUMENT_TYPE])
+            for filename in claimed:
+                repositories.update_skipped_file(
+                    session,
+                    submission_id,
+                    filename,
+                    {_REFETCH_STATUS: _REFETCH_IN_PROGRESS, _REFETCH_UPDATED_AT: _utcnow().isoformat()},
+                )
+            session.commit()
+        if not claimed:
+            return
+
+        try:
+            runner.fetch_public(url, dest_dir, only=sorted(claimed))
+        except OneDriveFetchError as exc:
+            message = _summarize_error_text(exc.stderr.strip() or str(exc), _ERROR_MESSAGE_LIMIT)
+            _set_refetch_failed(session_factory, submission_id, list(claimed), message)
+            logger.info("onedrive re-download failed for submission %s: %s", submission_id, message)
+            return
+
+        downloaded: dict[str, Path] = {}
+        for path in sorted(dest_dir.rglob("*")):
+            if path.is_file():
+                downloaded.setdefault(path.name.lower(), path)
+
+        with session_factory() as session:
+            submission = repositories.get_submission(session, submission_id)
+            if submission is None:
+                return
+            batch_id = submission.batch_id
+            for filename, document_type in claimed.items():
+                entry = repositories.get_skipped_file(session, submission_id, filename)
+                if entry is None:
+                    continue  # classified or deleted some other way meanwhile
+                source_path = downloaded.get(filename.lower())
+                if source_path is None:
+                    _set_refetch_failed(
+                        session_factory, submission_id, [filename], f"{filename} is no longer in the OneDrive link."
+                    )
+                    continue
+                try:
+                    _ingest_one_file(
+                        session,
+                        settings,
+                        job_executor,
+                        batch_id=batch_id,
+                        submission_id=submission_id,
+                        source_path=source_path,
+                        document_type=document_type,
+                    )
+                except UploadValidationError as exc:
+                    _set_refetch_failed(session_factory, submission_id, [filename], exc.message)
+                    continue
+                except Exception:
+                    logger.exception("failed to ingest re-downloaded %s (submission %s)", filename, submission_id)
+                    _set_refetch_failed(
+                        session_factory, submission_id, [filename], "The re-downloaded file could not be ingested."
+                    )
+                    continue
+                repositories.remove_skipped_file(session, submission_id, filename)
+                session.commit()
+                with contextlib.suppress(Exception):
+                    storage_key = entry.get("storage_key")
+                    if storage_key and settings.storage_backend == "s3":
+                        get_storage_service(settings).delete(storage_key)
+            recompute_batch_status(session, batch_id)
+            session.commit()
+        logger.info("re-downloaded %d skipped file(s) for onedrive submission %s", len(claimed), submission_id)
+    except Exception:
+        logger.exception("unexpected error re-downloading skipped files for onedrive submission %s", submission_id)
+        _set_refetch_failed(
+            session_factory,
+            submission_id,
+            list(claimed),
+            "The re-download encountered an internal processing error.",
+        )
+    finally:
+        shutil.rmtree(dest_dir, ignore_errors=True)
 
 
 def delete_submission(session: Session, settings: Settings, submission_id: UUID) -> None:
@@ -560,6 +794,7 @@ def delete_submission(session: Session, settings: Settings, submission_id: UUID)
     if submission is None:
         raise ApiError(404, "SUBMISSION_NOT_FOUND", f"OneDrive submission {submission_id} not found.")
     batch_id = submission.batch_id
+    skipped_keys = [item["storage_key"] for item in (submission.skipped_files or []) if item.get("storage_key")]
 
     documents = list(
         session.execute(
@@ -584,7 +819,7 @@ def delete_submission(session: Session, settings: Settings, submission_id: UUID)
 
     if settings.storage_backend == "s3":
         storage = get_storage_service(settings)
-        for key in (*(row.storage_key for row in documents), *job_output_keys):
+        for key in (*(row.storage_key for row in documents), *job_output_keys, *skipped_keys):
             with contextlib.suppress(FileNotFoundError):
                 storage.delete(key)
 
@@ -599,3 +834,4 @@ def delete_submission(session: Session, settings: Settings, submission_id: UUID)
     # document's own directory above -- see batches/document_ingest.py.
     for job_row in job_rows:
         shutil.rmtree(storage_root / "jobs" / str(job_row.id), ignore_errors=True)
+    shutil.rmtree(storage_root / "onedrive" / str(submission_id), ignore_errors=True)

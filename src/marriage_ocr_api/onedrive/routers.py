@@ -177,12 +177,15 @@ def classify_skipped_onedrive_file(
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(settings_dependency),
     job_executor: JobExecutorProtocol = Depends(get_job_executor),
+    onedrive_executor: OneDriveExecutorProtocol = Depends(get_onedrive_executor),
 ) -> OneDriveSubmissionResponse:
     """Lets a reviewer pick the document type for a file that came back
     NEEDS_MANUAL_CLASSIFICATION (or any other non-ROUTABLE skip reason) --
     the auto-classifier's keyword-matching heuristic couldn't tell what it
     was, but a human looking at it usually can. Routes it into the same
     Document/Job pipeline every auto-classified file already goes through.
+    If the file's bytes are no longer on hand, just that file is queued to
+    be re-downloaded from the link and ingested in the background instead.
     """
     batch = get_batch(session, batch_id)
     if batch is None:
@@ -199,6 +202,7 @@ def classify_skipped_onedrive_file(
         submission_id,
         filename=payload.filename,
         document_type=payload.document_type,
+        onedrive_executor=onedrive_executor,
     )
 
 
