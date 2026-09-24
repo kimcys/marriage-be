@@ -6,7 +6,10 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
+from marriage_ocr_api.activity.repositories import record_activity
 from marriage_ocr_api.api.dependencies import get_db_session, get_job_executor, settings_dependency
+from marriage_ocr_api.auth.dependencies import require_user
+from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.jobs.schemas import JobResponse, PaginatedJobs
 from marriage_ocr_api.jobs.service import build_job_download_response, build_job_response, get_job_or_raise, retry_job
@@ -40,8 +43,20 @@ def retry_one_job(
     request: Request,
     job_id: UUID,
     session: Session = Depends(get_db_session),
+    user: User = Depends(require_user),
 ) -> JobResponse:
     job = retry_job(job_id, session, get_job_executor(request))
+    record_activity(
+        session,
+        user,
+        "job.retried",
+        f"Restarted OCR processing for {job.original_filename}",
+        batch_id=job.batch_id,
+        target_type="job",
+        target_id=job.id,
+        target_label=job.original_filename,
+    )
+    session.commit()
     return build_job_response(job)
 
 

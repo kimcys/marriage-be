@@ -24,4 +24,4 @@ def build_fake_admin_user() -> object:
     from marriage_ocr_api.auth.models import User
     from marriage_ocr_api.auth.status import Role
 
-    return User(id=uuid4(), email="test-admin@example.com", role=Role.ADMIN.value)
+    return User(id=uuid4(), number=1, name="Test Admin", email="test-admin@example.com", role=Role.ADMIN.value)

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from marriage_ocr_api.activity.repositories import record_activity
 from marriage_ocr_api.api.dependencies import (
     get_db_session,
     get_job_executor,
@@ -14,11 +15,13 @@ from marriage_ocr_api.api.dependencies import (
     settings_dependency,
 )
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.auth.dependencies import require_admin
+from marriage_ocr_api.auth.dependencies import require_admin, require_user
+from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.batches.repositories import get_batch
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.jobs.service import JobExecutorProtocol
 from marriage_ocr_api.onedrive import repositories
+from marriage_ocr_api.onedrive.models import OneDriveSubmission
 from marriage_ocr_api.onedrive.response_models import (
     OneDriveSubmissionResponse,
     PaginatedOneDriveSubmissions,
@@ -37,6 +40,19 @@ from marriage_ocr_api.onedrive.status import OneDriveSubmissionStatus
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/batches", tags=["onedrive"])
+
+
+def _log_link(session: Session, user: User, action: str, summary: str, submission: OneDriveSubmission) -> None:
+    record_activity(
+        session,
+        user,
+        action,
+        summary,
+        batch_id=submission.batch_id,
+        target_type="onedrive_link",
+        target_id=submission.id,
+        target_label=submission.url,
+    )
 
 
 def _batch_not_found(batch_id: UUID) -> ApiError:
@@ -67,6 +83,7 @@ def submit_onedrive_link(
     payload: OneDriveLinkCreateRequest,
     session: Session = Depends(get_db_session),
     executor: OneDriveExecutorProtocol = Depends(get_onedrive_executor),
+    user: User = Depends(require_user),
 ) -> JSONResponse:
     batch = get_batch(session, batch_id)
     if batch is None:
@@ -82,6 +99,8 @@ def submit_onedrive_link(
         # as before (see get_or_create_submission's docstring).
         if submission.status == OneDriveSubmissionStatus.FAILED.value:
             submission = retry_submission(session, submission.id, executor)
+            _log_link(session, user, "onedrive.link_retried", "Retried OneDrive link", submission)
+            session.commit()
             response = build_submission_response(submission)
             return JSONResponse(status_code=202, content=response.model_dump(mode="json"))
         response = build_submission_response(submission)
@@ -100,6 +119,8 @@ def submit_onedrive_link(
         )
         session.commit()
         raise ApiError(500, "INTERNAL_ERROR", "Failed to submit the OneDrive link for background processing.") from exc
+    _log_link(session, user, "onedrive.link_submitted", f'Submitted OneDrive link to batch "{batch.name}"', submission)
+    session.commit()
     return JSONResponse(status_code=202, content=response.model_dump(mode="json"))
 
 
@@ -138,6 +159,7 @@ def retry_onedrive_link(
     submission_id: UUID,
     session: Session = Depends(get_db_session),
     executor: OneDriveExecutorProtocol = Depends(get_onedrive_executor),
+    user: User = Depends(require_user),
 ) -> OneDriveSubmissionResponse:
     batch = get_batch(session, batch_id)
     if batch is None:
@@ -148,6 +170,8 @@ def retry_onedrive_link(
         raise ApiError(404, "SUBMISSION_NOT_FOUND", f"OneDrive submission {submission_id} not found in this batch.")
 
     submission = retry_submission(session, submission_id, executor)
+    _log_link(session, user, "onedrive.link_retried", "Retried OneDrive link", submission)
+    session.commit()
     return build_submission_response(submission)
 
 
@@ -178,6 +202,7 @@ def classify_skipped_onedrive_file(
     settings: Settings = Depends(settings_dependency),
     job_executor: JobExecutorProtocol = Depends(get_job_executor),
     onedrive_executor: OneDriveExecutorProtocol = Depends(get_onedrive_executor),
+    user: User = Depends(require_user),
 ) -> OneDriveSubmissionResponse:
     """Lets a reviewer pick the document type for a file that came back
     NEEDS_MANUAL_CLASSIFICATION (or any other non-ROUTABLE skip reason) --
@@ -195,7 +220,7 @@ def classify_skipped_onedrive_file(
     if submission is None or submission.batch_id != batch_id:
         raise ApiError(404, "SUBMISSION_NOT_FOUND", f"OneDrive submission {submission_id} not found in this batch.")
 
-    return classify_skipped_file(
+    result = classify_skipped_file(
         session,
         settings,
         job_executor,
@@ -204,6 +229,27 @@ def classify_skipped_onedrive_file(
         document_type=payload.document_type,
         onedrive_executor=onedrive_executor,
     )
+    refetching = any(
+        item.filename == payload.filename and item.refetch_status is not None for item in result.skipped_files or []
+    )
+    record_activity(
+        session,
+        user,
+        "skipped_file.classified",
+        f"Classified {payload.filename} as {payload.document_type.value}"
+        + (" (re-downloading from OneDrive)" if refetching else ""),
+        batch_id=batch_id,
+        target_type="onedrive_link",
+        target_id=submission_id,
+        target_label=payload.filename,
+        details={
+            "filename": payload.filename,
+            "document_type": payload.document_type.value,
+            "re_downloaded": refetching,
+        },
+    )
+    session.commit()
+    return result
 
 
 @router.delete(
@@ -217,6 +263,7 @@ def delete_onedrive_link(
     submission_id: UUID,
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(settings_dependency),
+    user: User = Depends(require_admin),
 ) -> Response:
     """Deletes one OneDrive link and everything it caused to be ingested --
     its documents, their OCR jobs, and any records those jobs produced.
@@ -230,5 +277,17 @@ def delete_onedrive_link(
     if submission is None or submission.batch_id != batch_id:
         raise ApiError(404, "SUBMISSION_NOT_FOUND", f"OneDrive submission {submission_id} not found in this batch.")
 
+    url = submission.url
     delete_submission(session, settings, submission_id)
+    record_activity(
+        session,
+        user,
+        "onedrive.link_deleted",
+        f'Deleted OneDrive link from batch "{batch.name}" and everything it ingested',
+        batch_id=batch_id,
+        target_type="onedrive_link",
+        target_id=submission_id,
+        target_label=url,
+    )
+    session.commit()
     return Response(status_code=204)

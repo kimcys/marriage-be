@@ -42,7 +42,7 @@ def require_user(
         raise _UNAUTHENTICATED from exc
 
     user = repositories.get_user(session, user_id)
-    if user is None:
+    if user is None or not user.is_active:
         raise _UNAUTHENTICATED
     return user
 

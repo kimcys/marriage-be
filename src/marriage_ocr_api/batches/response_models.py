@@ -48,7 +48,12 @@ class BatchResponse(BaseModel):
     daerah: str | None
     negeri: str | None
     status: BatchStatus
+    # The user who added the batch: their id, display code (e.g. MOCR001)
+    # and name. All null if the creator was never recorded or has since
+    # been deleted.
     created_by: UUID | None
+    created_by_code: str | None = None
+    created_by_name: str | None = None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None

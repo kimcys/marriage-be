@@ -10,7 +10,7 @@ from marriage_ocr_api.core.config import Settings
 
 def authenticate(session: Session, *, email: str, password: str) -> User | None:
     user = repositories.get_user_by_email(session, email)
-    if user is None or not verify_password(password, user.password_hash):
+    if user is None or not user.is_active or not verify_password(password, user.password_hash):
         return None
     return user
 

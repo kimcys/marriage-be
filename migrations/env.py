@@ -6,6 +6,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from marriage_ocr_api.activity.models import ActivityLog  # noqa: F401
 from marriage_ocr_api.batches.models import Batch, Document, Export  # noqa: F401
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.base import Base

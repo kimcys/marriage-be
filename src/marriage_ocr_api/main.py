@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from marriage_ocr_api.activity.routers import router as activity_router
 from marriage_ocr_api.api.errors import ApiError, build_error_response
 from marriage_ocr_api.api.routers import (
     auth_router,
@@ -20,6 +21,7 @@ from marriage_ocr_api.api.routers import (
     records_router,
 )
 from marriage_ocr_api.auth.dependencies import require_user
+from marriage_ocr_api.auth.user_admin import router as users_router
 from marriage_ocr_api.core.config import Settings, get_settings
 from marriage_ocr_api.core.logging import configure_logging
 from marriage_ocr_api.core.request_id import (
@@ -153,6 +155,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(exports_router, dependencies=authenticated)
     app.include_router(onedrive_router, dependencies=authenticated)
     app.include_router(records_router, dependencies=authenticated)
+    app.include_router(activity_router)  # admin-only, enforced on the router itself
+    app.include_router(users_router)  # admin-only, enforced on the router itself
     return app
 
 

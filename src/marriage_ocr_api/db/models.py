@@ -55,6 +55,7 @@ class OCRJob(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+from marriage_ocr_api.activity.models import ActivityLog  # noqa: F401,E402
 from marriage_ocr_api.auth.models import User  # noqa: F401,E402
 from marriage_ocr_api.batches.models import Batch, Document, Export  # noqa: F401,E402
 from marriage_ocr_api.onedrive.models import OneDriveSubmission  # noqa: F401,E402

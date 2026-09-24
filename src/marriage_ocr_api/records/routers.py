@@ -1,24 +1,29 @@
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
+from marriage_ocr_api.activity.repositories import record_activity
 from marriage_ocr_api.api.dependencies import get_db_session
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.auth.dependencies import require_admin
+from marriage_ocr_api.auth.dependencies import require_admin, require_user
+from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.batches.repositories import (
     get_batch_location,
     get_batch_locations,
     list_distinct_batch_locations,
 )
+from marriage_ocr_api.db.models import OCRJob
 from marriage_ocr_api.records.api import (
     build_bulk_approve_response,
     build_record_response,
     build_records_page,
     build_revisions_page,
 )
+from marriage_ocr_api.records.models import OCRRecord
 from marriage_ocr_api.records.repositories import (
     RecordConflictError,
     RecordNotFoundError,
@@ -57,6 +62,37 @@ def _not_found(message: str) -> ApiError:
 
 def _conflict(message: str) -> ApiError:
     return ApiError(409, "RECORD_CONFLICT", message)
+
+
+def _record_label(session: Session, record: OCRRecord) -> str:
+    """What an audit entry calls a record: its source file plus the row it
+    came from, e.g. "image00012.jpg · page-1-row-3"."""
+    filename = get_document_filename(session, record.document_id)
+    if filename is None:
+        job = session.get(OCRJob, record.job_id)
+        filename = job.original_filename if job is not None else None
+    return f"{filename} · {record.source_key}" if filename else record.source_key
+
+
+def _log_record(
+    session: Session,
+    user: User,
+    action: str,
+    summary: str,
+    record: OCRRecord,
+    details: dict[str, Any] | None = None,
+) -> None:
+    record_activity(
+        session,
+        user,
+        action,
+        summary,
+        batch_id=record.batch_id,
+        target_type="record",
+        target_id=record.id,
+        target_label=_record_label(session, record),
+        details=details,
+    )
 
 
 @router.get("/api/v1/records", response_model=PaginatedRecords, operation_id="list_records")
@@ -150,11 +186,28 @@ def get_record(record_id: UUID, session: Session = Depends(get_db_session)) -> R
 @router.delete(
     "/api/v1/records/{record_id}", status_code=204, operation_id="delete_record", dependencies=[Depends(require_admin)]
 )
-def delete_one_record(record_id: UUID, session: Session = Depends(get_db_session)) -> Response:
+def delete_one_record(
+    record_id: UUID,
+    session: Session = Depends(get_db_session),
+    user: User = Depends(require_admin),
+) -> Response:
     try:
+        record = get_record_or_raise(session, record_id)
+        label, batch_id = _record_label(session, record), record.batch_id
         delete_record(session, record_id)
     except RecordNotFoundError as exc:
         raise _not_found("OCR record not found.") from exc
+    record_activity(
+        session,
+        user,
+        "record.deleted",
+        f"Deleted record {label}",
+        batch_id=batch_id,
+        target_type="record",
+        target_id=record_id,
+        target_label=label,
+    )
+    session.commit()
     return Response(status_code=204)
 
 
@@ -205,15 +258,30 @@ def patch_record(
     record_id: UUID,
     payload: RecordCorrectionRequest,
     session: Session = Depends(get_db_session),
+    user: User = Depends(require_user),
 ) -> RecordResponse:
     try:
+        before = dict(get_record_or_raise(session, record_id).field_values)
         record = apply_correction(
             session,
             record_id,
             expected_version=payload.version,
             field_values=payload.field_values,
-            reviewer=None,
+            reviewer=user.code,
             note=payload.note,
+        )
+        changes = {
+            field: [before.get(field), value]
+            for field, value in payload.field_values.items()
+            if before.get(field) != value
+        }
+        _log_record(
+            session,
+            user,
+            "record.corrected",
+            f"Corrected {len(changes)} field(s): {', '.join(changes) or 'none'}",
+            record,
+            details={"changes": changes, "version": record.version, "note": payload.note},
         )
         session.commit()
     except RecordNotFoundError as exc:
@@ -236,15 +304,17 @@ def approve_one_record(
     record_id: UUID,
     payload: RecordReviewRequest,
     session: Session = Depends(get_db_session),
+    user: User = Depends(require_user),
 ) -> RecordResponse:
     try:
         record = approve_record(
             session,
             record_id,
             expected_version=payload.version,
-            reviewer=None,
+            reviewer=user.code,
             note=payload.reason,
         )
+        _log_record(session, user, "record.approved", "Approved record", record, details={"note": payload.reason})
         session.commit()
     except RecordNotFoundError as exc:
         raise _not_found("OCR record not found.") from exc
@@ -265,9 +335,22 @@ def approve_one_record(
 def bulk_approve(
     payload: BulkApproveRequest,
     session: Session = Depends(get_db_session),
+    user: User = Depends(require_user),
 ) -> BulkApproveResponse:
     try:
-        items = bulk_approve_records(session, payload.record_ids, reviewer=payload.reviewer)
+        # Always the logged-in user -- payload.reviewer is free text any
+        # client could set to anyone, so it's no longer trusted for this.
+        items = bulk_approve_records(session, payload.record_ids, reviewer=user.code)
+        batch_ids = {item.batch_id for item in items if item.batch_id}
+        record_activity(
+            session,
+            user,
+            "record.bulk_approved",
+            f"Approved {len(items)} record(s) at once",
+            batch_id=next(iter(batch_ids)) if len(batch_ids) == 1 else None,
+            target_type="record",
+            details={"record_ids": [str(item.id) for item in items]},
+        )
         session.commit()
     except RecordNotFoundError as exc:
         raise _not_found("OCR record not found.") from exc

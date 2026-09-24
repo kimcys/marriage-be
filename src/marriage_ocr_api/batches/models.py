@@ -4,8 +4,9 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Uuid
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.batches.status import BatchStatus, DocumentStatus, DocumentType, ExportStatus
 from marriage_ocr_api.db.base import Base
 
@@ -28,13 +29,30 @@ class Batch(Base):
     daerah: Mapped[str | None] = mapped_column(String(255), nullable=True)
     negeri: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=BatchStatus.DRAFT.value, index=True)
-    created_by: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True, index=True)
+    # The user who added the batch. SET NULL (not CASCADE) on user delete:
+    # removing an account must never take its batches -- and every record
+    # extracted into them -- down with it.
+    created_by: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # selectin: a page of batches loads all their creators in one extra
+    # query instead of one per batch.
+    creator: Mapped[User | None] = relationship(lazy="selectin")
+
+    @property
+    def created_by_code(self) -> str | None:
+        return self.creator.code if self.creator is not None else None
+
+    @property
+    def created_by_name(self) -> str | None:
+        return self.creator.name if self.creator is not None else None
 
 
 class Document(Base):

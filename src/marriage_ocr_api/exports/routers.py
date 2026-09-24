@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from starlette.responses import Response
 
+from marriage_ocr_api.activity.repositories import record_activity
 from marriage_ocr_api.api.dependencies import get_db_session, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.auth.dependencies import require_admin
+from marriage_ocr_api.auth.dependencies import require_admin, require_user
+from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.batches.repositories import count_exports, get_batch, get_export, list_exports
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.exports.response_models import ExportCreateRequest, ExportResponse, PaginatedExports
@@ -57,6 +59,7 @@ def create_one_export(
     payload: ExportCreateRequest,
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(settings_dependency),
+    user: User = Depends(require_user),
 ) -> ExportResponse:
     batch = get_batch(session, payload.batch_id)
     if batch is None:
@@ -67,8 +70,20 @@ def create_one_export(
         batch_id=payload.batch_id,
         format=payload.format,
         include_unreviewed=payload.include_unreviewed,
-        created_by=payload.created_by,
+        created_by=user.id,
     )
+    record_activity(
+        session,
+        user,
+        "export.created",
+        f'Exported batch "{batch.name}" as {export.format} ({export.record_count or 0} record(s))',
+        batch_id=batch.id,
+        target_type="export",
+        target_id=export.id,
+        target_label=batch.name,
+        details={"format": export.format, "include_unreviewed": payload.include_unreviewed},
+    )
+    session.commit()
     return ExportResponse.model_validate(export)
 
 
@@ -95,14 +110,28 @@ def download_export(
     export_id: UUID,
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(settings_dependency),
+    user: User = Depends(require_user),
 ) -> Response:
     export = get_export(session, export_id)
     if export is None:
         raise _export_not_found(export_id)
     try:
-        return build_export_download_response(export, settings)
+        response = build_export_download_response(export, settings)
     except FileNotFoundError as exc:
         raise ApiError(410, "EXPORT_FILE_MISSING", "The expected export file is missing.") from exc
+    # Exports hold personal data (names, IC numbers) -- worth knowing who
+    # took a copy.
+    record_activity(
+        session,
+        user,
+        "export.downloaded",
+        f"Downloaded {export.format} export ({export.record_count or 0} record(s))",
+        batch_id=export.batch_id,
+        target_type="export",
+        target_id=export.id,
+    )
+    session.commit()
+    return response
 
 
 @router.delete("/{export_id}", status_code=204, operation_id="delete_export", dependencies=[Depends(require_admin)])
@@ -110,9 +139,21 @@ def delete_one_export(
     export_id: UUID,
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(settings_dependency),
+    user: User = Depends(require_admin),
 ) -> Response:
     export = get_export(session, export_id)
     if export is None:
         raise _export_not_found(export_id)
+    batch_id, export_format = export.batch_id, export.format
     delete_export_artifact(session, settings, export)
+    record_activity(
+        session,
+        user,
+        "export.deleted",
+        f"Deleted {export_format} export",
+        batch_id=batch_id,
+        target_type="export",
+        target_id=export_id,
+    )
+    session.commit()
     return Response(status_code=204)

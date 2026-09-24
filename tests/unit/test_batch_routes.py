@@ -414,3 +414,33 @@ def test_download_document_scoped_to_the_wrong_batch_returns_404(client: TestCli
     response = client.get(f"/api/v1/batches/{other_batch_id}/documents/{document.id}/download")
 
     assert response.status_code == 404
+
+
+def test_create_batch_records_the_logged_in_user_as_creator(engine, tmp_path: Path) -> None:
+    from marriage_ocr_api.auth.repositories import create_user
+
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with session_factory() as db:
+        user = create_user(db, email="aiman@example.com", password_hash="x", role="ADMIN")
+        db.commit()
+
+    def override_session() -> Session:
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app = create_app(Settings(storage_root=tmp_path))
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[require_user] = lambda: user
+    client = TestClient(app)
+
+    created = client.post("/api/v1/batches", json={"name": "Batch 1"})
+    assert created.status_code == 201
+    assert created.json()["created_by"] == str(user.id)
+    assert created.json()["created_by_code"] == "MOCR001"
+
+    listed = client.get("/api/v1/batches").json()["items"][0]
+    assert listed["created_by"] == str(user.id)
+    assert listed["created_by_code"] == "MOCR001"

@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
+from marriage_ocr_api.activity.repositories import record_activity
 from marriage_ocr_api.api.dependencies import get_db_session, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.auth.dependencies import require_admin
+from marriage_ocr_api.auth.dependencies import require_admin, require_user
+from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.batches.repositories import (
     count_batches,
     count_batches_by_status,
@@ -62,14 +64,26 @@ def _batch_not_found(batch_id: UUID) -> ApiError:
 def create_one_batch(
     payload: BatchCreateRequest,
     session: Session = Depends(get_db_session),
+    user: User = Depends(require_user),
 ) -> BatchResponse:
     batch = create_batch(
         session,
         name=payload.name,
         description=payload.description,
-        created_by=None,
+        created_by=user.id,
         daerah=payload.daerah,
         negeri=payload.negeri,
+    )
+    record_activity(
+        session,
+        user,
+        "batch.created",
+        f'Added batch "{batch.name}"',
+        batch_id=batch.id,
+        target_type="batch",
+        target_id=batch.id,
+        target_label=batch.name,
+        details={"daerah": batch.daerah, "negeri": batch.negeri},
     )
     session.commit()
     return BatchResponse.model_validate(batch)
@@ -115,10 +129,30 @@ def rename_one_batch(
     batch_id: UUID,
     payload: BatchRenameRequest,
     session: Session = Depends(get_db_session),
+    user: User = Depends(require_user),
 ) -> BatchResponse:
+    existing = get_batch(session, batch_id)
+    before = (
+        {"name": existing.name, "daerah": existing.daerah, "negeri": existing.negeri} if existing is not None else {}
+    )
     batch = rename_batch(session, batch_id, payload.name, daerah=payload.daerah, negeri=payload.negeri)
     if batch is None:
         raise _batch_not_found(batch_id)
+    after = {"name": batch.name, "daerah": batch.daerah, "negeri": batch.negeri}
+    changes = {field: [before.get(field), value] for field, value in after.items() if before.get(field) != value}
+    if changes:
+        record_activity(
+            session,
+            user,
+            "batch.updated",
+            f'Edited batch "{batch.name}": '
+            + ", ".join(f"{field} {old or '—'} → {new or '—'}" for field, (old, new) in changes.items()),
+            batch_id=batch.id,
+            target_type="batch",
+            target_id=batch.id,
+            target_label=batch.name,
+            details={"changes": changes},
+        )
     session.commit()
     return BatchResponse.model_validate(batch)
 
@@ -128,11 +162,24 @@ def delete_one_batch(
     batch_id: UUID,
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(settings_dependency),
+    user: User = Depends(require_admin),
 ) -> Response:
     batch = get_batch(session, batch_id)
     if batch is None:
         raise _batch_not_found(batch_id)
+    name = batch.name
     delete_batch(session, settings, batch_id)
+    record_activity(
+        session,
+        user,
+        "batch.deleted",
+        f'Deleted batch "{name}" and everything in it',
+        batch_id=batch_id,
+        target_type="batch",
+        target_id=batch_id,
+        target_label=name,
+    )
+    session.commit()
     return Response(status_code=204)
 
 
@@ -140,6 +187,7 @@ def delete_one_batch(
 def cancel_one_batch_processing(
     batch_id: UUID,
     session: Session = Depends(get_db_session),
+    user: User = Depends(require_user),
 ) -> BatchResponse:
     """Stops the batch's in-flight OCR processing -- every PENDING job is
     skipped and every PROCESSING job's subprocess is killed. Safe to call
@@ -148,6 +196,17 @@ def cancel_one_batch_processing(
     if batch is None:
         raise _batch_not_found(batch_id)
     batch = cancel_batch_processing(session, batch_id)
+    record_activity(
+        session,
+        user,
+        "batch.processing_stopped",
+        f'Stopped OCR processing for batch "{batch.name}"',
+        batch_id=batch.id,
+        target_type="batch",
+        target_id=batch.id,
+        target_label=batch.name,
+    )
+    session.commit()
     return BatchResponse.model_validate(batch)
 
 
