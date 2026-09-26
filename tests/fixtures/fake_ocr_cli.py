@@ -65,6 +65,7 @@ def _handle_classify(argv: list[str]) -> int:
     placeholder anyway."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
+    parser.add_argument("--page-ocr-output")
     parser.parse_args(argv)
     print(
         json.dumps(
@@ -116,6 +117,7 @@ def main() -> int:
     parser.add_argument("--debug")
     parser.add_argument("--config")
     parser.add_argument("--reset-output", action="store_true")
+    parser.add_argument("--page1-ocr")
     args = parser.parse_args(argv)
 
     mode = os.environ.get("FAKE_OCR_MODE", "success")

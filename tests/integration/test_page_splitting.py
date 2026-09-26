@@ -63,7 +63,7 @@ class _FakeFetchRunner:
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self._source_pdf, dest / self._filename)
 
-    def classify(self, file_path: Path) -> Classification:
+    def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
         return self._classification
 
 

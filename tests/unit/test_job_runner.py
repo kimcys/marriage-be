@@ -367,3 +367,27 @@ def test_runner_ignores_cancel_requested_that_never_fires(tmp_path: Path) -> Non
 
 def test_sanitizes_ansi_sequences_from_stderr() -> None:
     assert sanitize_stderr_text("\x1b[31mfailed\x1b[0m\n", 100) == "failed\n"
+
+
+@pytest.mark.parametrize(
+    ("document_type", "expects_flag"),
+    [(DocumentType.TYPED_NIKAH_MODERN, True), (DocumentType.HANDWRITTEN_REGISTER, False)],
+)
+def test_page1_ocr_is_passed_only_to_process_typed(tmp_path: Path, document_type, expects_flag) -> None:
+    from marriage_ocr_api.jobs.runner import OCRRunRequest
+
+    page1 = tmp_path / "source.pdf.page1-ocr.json"
+    request = OCRRunRequest(
+        input_path=tmp_path / "source.pdf",
+        output_path=tmp_path / "out.csv",
+        debug_path=tmp_path / "debug",
+        stdout_log_path=tmp_path / "stdout.log",
+        stderr_log_path=tmp_path / "stderr.log",
+        document_type=document_type,
+        page1_ocr_path=page1,
+    )
+
+    command = SubprocessOCRRunner(_settings(tmp_path))._build_command(request)
+
+    assert (command[-2:] == ["--page1-ocr", str(page1)]) is expects_flag
+    assert ("--page1-ocr" in command) is expects_flag

@@ -97,8 +97,14 @@ class OneDriveFetchRunner:
                 f"onedrive fetch-public exited with code {result.returncode}", stderr=result.stderr
             )
 
-    def classify(self, file_path: Path) -> Classification:
-        result = self._run(["classify", "--input", str(file_path)])
+    def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
+        """`page_ocr_output`: where marriage-ocr saves page 1's Vision result
+        if the file turns out to be a typed PDF (see jobs/paths.py::
+        page1_ocr_relative_path) -- nothing is written otherwise."""
+        args = ["classify", "--input", str(file_path)]
+        if page_ocr_output is not None:
+            args.extend(["--page-ocr-output", str(page_ocr_output)])
+        result = self._run(args)
         if result.returncode != 0:
             raise ClassifyError(f"classify exited with code {result.returncode}", stderr=result.stderr)
         try:

@@ -88,3 +88,10 @@ def build_job_paths(storage_root: Path, job_id: UUID, extension: str = ".pdf") -
         stdout_log_path=stdout_log_path,
         stderr_log_path=stderr_log_path,
     )
+
+
+def page1_ocr_relative_path(input_relative_path: str) -> str:
+    """Where a typed document's page-1 Vision result, saved by marriage-ocr's
+    `classify --page-ocr-output`, sits next to its input -- the job runner
+    hands it to `process-typed --page1-ocr` so page 1 isn't OCR'd twice."""
+    return f"{input_relative_path}.page1-ocr.json"

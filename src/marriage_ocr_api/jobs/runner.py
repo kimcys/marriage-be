@@ -68,6 +68,9 @@ class OCRRunRequest:
     stdout_log_path: Path
     stderr_log_path: Path
     document_type: DocumentType = DocumentType.HANDWRITTEN_REGISTER
+    # Typed only: classify's saved page-1 Vision result (see jobs/paths.py::
+    # page1_ocr_relative_path), reused instead of a second page-1 call.
+    page1_ocr_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +130,11 @@ class SubprocessOCRRunner:
     def _build_command(self, request: OCRRunRequest) -> list[str]:
         cli_command = _CLI_COMMAND_BY_DOCUMENT_TYPE[request.document_type]
         config_path = self._config_path_for(request.document_type)
+        page1_ocr_args = (
+            ["--page1-ocr", str(request.page1_ocr_path)]
+            if request.page1_ocr_path is not None and cli_command == "process-typed"
+            else []
+        )
         return [
             str(self.settings.ocr_python_executable),
             "-m",
@@ -141,6 +149,7 @@ class SubprocessOCRRunner:
             "--config",
             str(config_path),
             "--reset-output",
+            *page1_ocr_args,
         ]
 
     def _working_dir(self) -> Path:

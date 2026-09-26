@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from marriage_ocr_api.batches.repositories import recompute_batch_status, recomp
 from marriage_ocr_api.batches.status import TYPED_DOCUMENT_TYPES, DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db import repositories
+from marriage_ocr_api.jobs.paths import page1_ocr_relative_path
 from marriage_ocr_api.jobs.runner import (
     OCRRunRequest,
     SubprocessOCRRunner,
@@ -39,6 +41,18 @@ def _ensure_input_materialized(settings: Settings, input_path: Path, input_relat
     if settings.storage_backend != "s3" or input_path.exists():
         return
     get_storage_service(settings).materialize(input_relative_path, input_path)
+
+
+def _page1_ocr_path(settings: Settings, input_relative_path: str) -> Path | None:
+    """classify's saved page-1 Vision result for a typed input, fetched from
+    object storage if this node doesn't have it. Missing is normal (manual
+    classify, pre-existing documents) -- process-typed then OCRs page 1."""
+    relative_path = page1_ocr_relative_path(input_relative_path)
+    path = settings.storage_root.resolve() / relative_path
+    if not path.is_file() and settings.storage_backend == "s3":
+        with contextlib.suppress(Exception):
+            get_storage_service(settings).materialize(relative_path, path)
+    return path if path.is_file() else None
 
 
 def _mark_failed_safe(
@@ -122,6 +136,7 @@ def process_ocr_job(
             stdout_log_path=stdout_log_path,
             stderr_log_path=stderr_log_path,
             document_type=document_type,
+            page1_ocr_path=_page1_ocr_path(settings, job.input_relative_path) if is_typed else None,
         )
 
         def _cancel_requested() -> bool:

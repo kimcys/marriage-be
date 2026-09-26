@@ -17,10 +17,11 @@ from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.document_ingest import create_document_page_jobs, document_paths, split_page_count
 from marriage_ocr_api.batches.models import Document
 from marriage_ocr_api.batches.repositories import create_document, recompute_batch_status, recompute_document_status
-from marriage_ocr_api.batches.status import DocumentType
+from marriage_ocr_api.batches.status import TYPED_DOCUMENT_TYPES, DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db import repositories as job_repositories
 from marriage_ocr_api.db.models import OCRJob
+from marriage_ocr_api.jobs.paths import page1_ocr_relative_path
 from marriage_ocr_api.jobs.runner import sanitize_stderr_text
 from marriage_ocr_api.jobs.service import JobExecutorProtocol
 from marriage_ocr_api.jobs.status import JobStatus
@@ -89,6 +90,9 @@ _REFETCH_FAILED = "FAILED"
 # usually environmental (e.g. a worker that couldn't read the Google Vision
 # key), and NEEDS_MANUAL_CLASSIFICATION can resolve via neighbour fallback
 # once the pages around it classify (see reclassify_skipped_files).
+# Jawi-only pages are skipped completely: never routed by neighbour
+# fallback, never offered for manual classification, never reclassified.
+_SKIPPED_JAWI = "SKIPPED_JAWI"
 _RECLASSIFIABLE_STATUSES = frozenset({"CLASSIFY_FAILED", "NEEDS_MANUAL_CLASSIFICATION"})
 
 
@@ -139,7 +143,8 @@ def build_submission_response(submission: OneDriveSubmission) -> OneDriveSubmiss
             SkippedFile(
                 filename=item["filename"],
                 status=item["status"],
-                classifiable=item.get(_REFETCH_STATUS) not in (_REFETCH_QUEUED, _REFETCH_IN_PROGRESS),
+                classifiable=item["status"] != _SKIPPED_JAWI
+                and item.get(_REFETCH_STATUS) not in (_REFETCH_QUEUED, _REFETCH_IN_PROGRESS),
                 refetch_status=item.get(_REFETCH_STATUS),
                 refetch_error=item.get(_REFETCH_ERROR),
             )
@@ -176,6 +181,21 @@ def _mark_submission_failed_safe(
             logger.exception("failed to mark onedrive submission %s as failed", submission_id)
 
 
+def _page_ocr_staging_path(settings: Settings, submission_id: UUID, index: int) -> Path:
+    """Where classify saves one downloaded file's page-1 Vision result
+    (typed PDFs only) until _ingest_one_file stores it next to the input."""
+    return settings.storage_root.resolve() / "onedrive" / str(submission_id) / "page-ocr" / f"{index}.json"
+
+
+def _store_page1_ocr(settings: Settings, source: Path, input_relative_path: str) -> None:
+    relative_path = page1_ocr_relative_path(input_relative_path)
+    dest = settings.storage_root.resolve() / relative_path
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, dest)
+    if settings.storage_backend == "s3":
+        get_storage_service(settings).put_file(dest, relative_path, content_type="application/json")
+
+
 def _ingest_one_file(
     session: Session,
     settings: Settings,
@@ -185,6 +205,7 @@ def _ingest_one_file(
     submission_id: UUID,
     source_path: Path,
     document_type: DocumentType,
+    page1_ocr_source: Path | None = None,
 ) -> UUID:
     document_id = uuid4()
     paths = document_paths(settings.storage_root, batch_id, document_id, source_path.suffix or ".pdf")
@@ -196,6 +217,8 @@ def _ingest_one_file(
             get_storage_service(settings).put_file(
                 local_path, stored.input_relative_path, content_type=stored.content_type
             )
+        if page1_ocr_source is not None and page1_ocr_source.is_file() and document_type in TYPED_DOCUMENT_TYPES:
+            _store_page1_ocr(settings, page1_ocr_source, stored.input_relative_path)
 
         page_split_count = split_page_count(document_type, stored.content_type, paths.input_source_path)
         document = create_document(
@@ -357,7 +380,9 @@ def _apply_neighbor_fallback(
     """
     result = list(classified)
     for i, (file_path, classification) in enumerate(result):
-        if classification.doc_type != "unknown":
+        # Status, not just doc_type: a Jawi page usually reads doc_type="unknown"
+        # too (no Latin title keyword matches), and must never be routed.
+        if classification.doc_type != "unknown" or classification.status != "NEEDS_MANUAL_CLASSIFICATION":
             continue
 
         before = next((c for _, c in reversed(result[:i]) if c.status == "ROUTABLE"), None)
@@ -436,9 +461,11 @@ def run_onedrive_fetch(
         skipped_files: list[dict[str, str]] = []
         with session_factory() as session:
             classified: list[tuple[Path, Classification]] = []
-            for file_path in files:
+            page_ocr_by_file: dict[Path, Path] = {}
+            for index, file_path in enumerate(files):
+                page_ocr_by_file[file_path] = _page_ocr_staging_path(settings, submission_id, index)
                 try:
-                    classification = runner.classify(file_path)
+                    classification = runner.classify(file_path, page_ocr_output=page_ocr_by_file[file_path])
                 except ClassifyError as exc:
                     logger.exception(
                         "classify failed for %s (submission %s): %s",
@@ -467,6 +494,7 @@ def run_onedrive_fetch(
                         submission_id=submission_id,
                         source_path=file_path,
                         document_type=document_type,
+                        page1_ocr_source=page_ocr_by_file.get(file_path),
                     )
                 except UploadValidationError as exc:
                     _record_skipped_file(settings, submission_id, skipped_files, file_path, exc.code)
@@ -478,6 +506,7 @@ def run_onedrive_fetch(
             recompute_batch_status(session, batch_id)
             session.commit()
         shutil.rmtree(dest_dir, ignore_errors=True)
+        shutil.rmtree(_page_ocr_staging_path(settings, submission_id, 0).parent, ignore_errors=True)
         logger.info("completed onedrive submission %s (%d skipped)", submission_id, len(skipped_files))
     except Exception:
         logger.exception("unexpected error processing onedrive submission %s", submission_id)
@@ -593,6 +622,9 @@ def classify_skipped_file(
     entry = repositories.get_skipped_file(session, submission_id, filename)
     if entry is None:
         raise ApiError(404, "SKIPPED_FILE_NOT_FOUND", f"{filename} is not a skipped file on this submission.")
+
+    if entry.get("status") == _SKIPPED_JAWI:
+        raise ApiError(409, "SKIPPED_FILE_JAWI", f"{filename} is a Jawi page and is skipped from processing.")
 
     storage_key = entry.get("storage_key")
     source_path = settings.storage_root.resolve() / storage_key if storage_key else None
@@ -873,7 +905,8 @@ def run_skipped_files_reclassify(
             }
 
         classified: list[tuple[Path, Classification]] = []
-        for filename in sorted(entries):
+        page_ocr_by_file: dict[Path, Path] = {}
+        for index, filename in enumerate(sorted(entries)):
             storage_key = entries[filename].get("storage_key")
             source_path = settings.storage_root.resolve() / storage_key if storage_key else None
             if (
@@ -886,8 +919,11 @@ def run_skipped_files_reclassify(
                     get_storage_service(settings).materialize(storage_key, source_path)
             if source_path is None or not source_path.is_file():
                 continue
+            page_ocr_by_file[source_path] = _page_ocr_staging_path(settings, submission_id, index)
             try:
-                classified.append((source_path, runner.classify(source_path)))
+                classified.append(
+                    (source_path, runner.classify(source_path, page_ocr_output=page_ocr_by_file[source_path]))
+                )
             except ClassifyError as exc:
                 logger.warning(
                     "reclassify failed for %s (submission %s): %s",
@@ -920,6 +956,7 @@ def run_skipped_files_reclassify(
                         submission_id=submission_id,
                         source_path=source_path,
                         document_type=document_type,
+                        page1_ocr_source=page_ocr_by_file.get(source_path),
                     )
                 except UploadValidationError as exc:
                     session.rollback()
@@ -942,6 +979,7 @@ def run_skipped_files_reclassify(
             repositories.restore_fetched(session, submission_id)
             recompute_batch_status(session, batch_id)
             session.commit()
+        shutil.rmtree(_page_ocr_staging_path(settings, submission_id, 0).parent, ignore_errors=True)
         logger.info(
             "reclassified onedrive submission %s: %d of %d skipped file(s) ingested",
             submission_id,
@@ -992,7 +1030,8 @@ def delete_submission(session: Session, settings: Settings, submission_id: UUID)
 
     if settings.storage_backend == "s3":
         storage = get_storage_service(settings)
-        for key in (*(row.storage_key for row in documents), *job_output_keys, *skipped_keys):
+        page1_ocr_keys = [page1_ocr_relative_path(row.storage_key) for row in documents if row.storage_key]
+        for key in (*(row.storage_key for row in documents), *job_output_keys, *skipped_keys, *page1_ocr_keys):
             with contextlib.suppress(FileNotFoundError):
                 storage.delete(key)
 

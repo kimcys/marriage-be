@@ -75,7 +75,7 @@ class FakeFetchRunner:
             if only is None or filename in only:
                 (dest / filename).write_bytes(content)
 
-    def classify(self, file_path: Path) -> Classification:
+    def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
         return self._classifications[file_path.name]
 
 
@@ -83,7 +83,7 @@ class FailingFetchRunner:
     def fetch_public(self, url: str, dest: Path) -> None:
         raise OneDriveFetchError("sign-in required", stderr="requires interactive sign-in")
 
-    def classify(self, file_path: Path) -> Classification:
+    def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
         raise AssertionError("classify should never be called when fetch itself fails")
 
 
@@ -406,7 +406,7 @@ def test_run_onedrive_fetch_summarizes_a_long_rich_traceback_stderr(tmp_path: Pa
         def fetch_public(self, url: str, dest: Path) -> None:
             raise OneDriveFetchError("onedrive fetch-public exited with code 1", stderr=box_traceback)
 
-        def classify(self, file_path: Path) -> Classification:
+        def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
             raise AssertionError("classify should never be called when fetch itself fails")
 
     engine = _engine()
@@ -906,7 +906,7 @@ def test_recover_stale_submissions_releases_stuck_refetches(tmp_path: Path) -> N
 
 
 class BrokenClassifyRunner(FakeFetchRunner):
-    def classify(self, file_path: Path) -> Classification:
+    def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
         raise ClassifyError("classify exited with code 1", stderr="PermissionError: google-vision.json")
 
 
@@ -966,7 +966,7 @@ def test_reclassify_updates_status_of_files_that_still_dont_route(tmp_path: Path
     session.close()
 
     class HalfBrokenRunner(FakeFetchRunner):
-        def classify(self, file_path: Path) -> Classification:
+        def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
             if file_path.name == "image00001.pdf":
                 return _UNKNOWN
             raise ClassifyError("classify exited with code 1")
@@ -1088,4 +1088,105 @@ def test_split_page_inputs_reach_object_storage_for_a_worker_on_another_droplet(
     assert len(jobs) == 3
     for job in jobs:
         assert job.input_relative_path in storage.objects
+    session.close()
+
+
+def test_apply_neighbor_fallback_never_routes_a_jawi_page_with_unknown_doc_type() -> None:
+    # What a real Jawi page looks like: no Latin title keyword matched either.
+    jawi = Classification(
+        doc_type="unknown", record_type=None, layout_variant=None, status="SKIPPED_JAWI", config_path=None
+    )
+    classified = [
+        (Path("page1.jpg"), _ROUTABLE_NIKAH_LEGACY),
+        (Path("page2.jpg"), jawi),
+        (Path("page3.jpg"), _ROUTABLE_NIKAH_LEGACY),
+    ]
+    result = _apply_neighbor_fallback(classified)
+    assert result[1][1].status == "SKIPPED_JAWI"
+
+
+def test_jawi_skipped_file_cannot_be_manually_classified(tmp_path: Path) -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!jawi")
+    session.commit()
+    session.close()
+
+    settings = Settings(storage_root=tmp_path)
+    jawi = Classification(
+        doc_type="unknown", record_type=None, layout_variant=None, status="SKIPPED_JAWI", config_path=None
+    )
+    runner = FakeFetchRunner(files={"jawi.pdf": _FAKE_PDF_BYTES}, classifications={"jawi.pdf": jawi})
+    run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), runner)
+
+    session = session_factory()
+    response = build_submission_response(get_submission(session, submission.id))
+    assert [(f.status, f.classifiable) for f in response.skipped_files] == [("SKIPPED_JAWI", False)]
+    with pytest.raises(ApiError) as exc_info:
+        classify_skipped_file(
+            session,
+            settings,
+            FakeJobExecutor(),
+            submission.id,
+            filename="jawi.pdf",
+            document_type=DocumentType.HANDWRITTEN_REGISTER,
+        )
+    assert exc_info.value.code == "SKIPPED_FILE_JAWI"
+    assert list_documents(session, batch.id, limit=10, offset=0) == []
+    session.close()
+
+
+class PageOcrSavingRunner(FakeFetchRunner):
+    """Mimics marriage-ocr's `classify --page-ocr-output`: writes the file
+    only for a typed classification."""
+
+    def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
+        classification = self._classifications[file_path.name]
+        if page_ocr_output is not None and classification.doc_type == "typed":
+            page_ocr_output.parent.mkdir(parents=True, exist_ok=True)
+            page_ocr_output.write_text('{"version": 1}')
+        return classification
+
+
+_TYPED_NIKAH_MODERN = Classification(
+    doc_type="typed",
+    record_type="nikah",
+    layout_variant="modern",
+    status="ROUTABLE",
+    config_path="config/typed_nikah_modern.yaml",
+)
+
+
+def test_typed_file_keeps_classifys_page1_ocr_next_to_its_input(tmp_path: Path, monkeypatch) -> None:
+    import marriage_ocr_api.onedrive.service as onedrive_service
+    from marriage_ocr_api.jobs.paths import page1_ocr_relative_path
+
+    storage = _FakeObjectStorage()
+    monkeypatch.setattr(onedrive_service, "get_storage_service", lambda _settings: storage)
+
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!page1-ocr")
+    session.commit()
+    session.close()
+
+    settings = Settings(storage_root=tmp_path, storage_backend="s3")
+    runner = PageOcrSavingRunner(
+        files={"typed.pdf": _FAKE_PDF_BYTES, "hand.pdf": _FAKE_PDF_BYTES},
+        classifications={"typed.pdf": _TYPED_NIKAH_MODERN, "hand.pdf": _classification()},
+    )
+    run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), runner)
+
+    session = session_factory()
+    documents = {d.original_filename: d for d in list_documents(session, batch.id, limit=10, offset=0)}
+    typed_key = page1_ocr_relative_path(documents["typed.pdf"].storage_key)
+    assert (tmp_path / typed_key).is_file()
+    assert typed_key in storage.objects
+    assert page1_ocr_relative_path(documents["hand.pdf"].storage_key) not in storage.objects
+    # Staging copies are cleaned up once the run finishes.
+    assert not (tmp_path / "onedrive" / str(submission.id) / "page-ocr").exists()
     session.close()

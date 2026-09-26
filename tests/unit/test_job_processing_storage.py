@@ -215,3 +215,25 @@ def test_process_ocr_job_uses_csv_output_and_importer_for_every_typed_document_t
         # (a stray BOM prefix) instead of "Bil" when the CSV writer's BOM
         # (utf-8-sig) wasn't stripped on read.
         assert records[0].field_values["Bil"] == "1"
+
+
+def test_page1_ocr_is_materialized_from_object_storage_or_skipped(tmp_path, monkeypatch) -> None:
+    import marriage_ocr_api.jobs.processing as processing
+    from marriage_ocr_api.core.config import Settings
+
+    stored = {"batches/b/documents/d/input/source.pdf.page1-ocr.json": b'{"version": 1}'}
+
+    class FakeStorage:
+        def materialize(self, key, destination):
+            if key not in stored:
+                raise FileNotFoundError(key)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(stored[key])
+            return destination
+
+    monkeypatch.setattr(processing, "get_storage_service", lambda _settings: FakeStorage())
+    settings = Settings(storage_root=tmp_path, storage_backend="s3")
+
+    found = processing._page1_ocr_path(settings, "batches/b/documents/d/input/source.pdf")
+    assert found is not None and found.read_bytes() == b'{"version": 1}'
+    assert processing._page1_ocr_path(settings, "batches/b/documents/other/input/source.pdf") is None

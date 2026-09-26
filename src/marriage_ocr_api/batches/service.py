@@ -19,6 +19,7 @@ from marriage_ocr_api.batches.repositories import (
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db import repositories as job_repositories
 from marriage_ocr_api.db.models import OCRJob
+from marriage_ocr_api.jobs.paths import page1_ocr_relative_path
 from marriage_ocr_api.storage.factory import get_storage_service
 
 
@@ -82,7 +83,8 @@ def delete_batch(session: Session, settings: Settings, batch_id: UUID) -> None:
 
     if settings.storage_backend == "s3":
         storage = get_storage_service(settings)
-        for key in (*document_keys, *job_output_keys, *export_keys):
+        page1_ocr_keys = [page1_ocr_relative_path(key) for key in document_keys if key]
+        for key in (*document_keys, *job_output_keys, *export_keys, *page1_ocr_keys):
             with contextlib.suppress(FileNotFoundError):
                 storage.delete(key)
 
