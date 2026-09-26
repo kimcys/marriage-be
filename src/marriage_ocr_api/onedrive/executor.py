@@ -5,7 +5,12 @@ from uuid import UUID
 
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.jobs.service import JobExecutorProtocol
-from marriage_ocr_api.onedrive.service import SessionFactory, run_onedrive_fetch, run_skipped_files_refetch
+from marriage_ocr_api.onedrive.service import (
+    SessionFactory,
+    run_onedrive_fetch,
+    run_skipped_files_reclassify,
+    run_skipped_files_refetch,
+)
 
 
 class OneDriveExecutor:
@@ -35,6 +40,11 @@ class OneDriveExecutor:
     def submit_refetch(self, submission_id: UUID) -> Future[None]:
         return self._pool.submit(
             run_skipped_files_refetch, submission_id, self.settings, self._session_factory, self._job_executor
+        )
+
+    def submit_reclassify(self, submission_id: UUID) -> Future[None]:
+        return self._pool.submit(
+            run_skipped_files_reclassify, submission_id, self.settings, self._session_factory, self._job_executor
         )
 
     def shutdown(self) -> None:

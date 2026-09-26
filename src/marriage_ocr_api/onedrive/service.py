@@ -72,6 +72,8 @@ class OneDriveExecutorProtocol(Protocol):
 
     def submit_refetch(self, submission_id: UUID) -> object: ...
 
+    def submit_reclassify(self, submission_id: UUID) -> object: ...
+
 
 # skipped_files entry keys for a missing file being re-downloaded on its own
 # (see classify_skipped_file / run_skipped_files_refetch).
@@ -82,6 +84,12 @@ _REFETCH_UPDATED_AT = "refetch_updated_at"
 _REFETCH_QUEUED = "QUEUED"
 _REFETCH_IN_PROGRESS = "IN_PROGRESS"
 _REFETCH_FAILED = "FAILED"
+
+# Skip reasons worth re-running auto-classification for: CLASSIFY_FAILED is
+# usually environmental (e.g. a worker that couldn't read the Google Vision
+# key), and NEEDS_MANUAL_CLASSIFICATION can resolve via neighbour fallback
+# once the pages around it classify (see reclassify_skipped_files).
+_RECLASSIFIABLE_STATUSES = frozenset({"CLASSIFY_FAILED", "NEEDS_MANUAL_CLASSIFICATION"})
 
 
 class SessionFactory(Protocol):
@@ -379,6 +387,15 @@ def _apply_neighbor_fallback(
     return result
 
 
+def _route(classification: Classification) -> DocumentType | str:
+    """The DocumentType a classification ingests as, or the skip status to
+    record when it can't be routed."""
+    if classification.status != "ROUTABLE" or classification.record_type is None:
+        return classification.status
+    route_key = (classification.doc_type, classification.record_type, classification.layout_variant)
+    return CLASSIFICATION_TO_DOCUMENT_TYPE.get(route_key) or "UNKNOWN_ROUTABLE_COMBINATION"
+
+
 def run_onedrive_fetch(
     submission_id: UUID,
     settings: Settings,
@@ -422,8 +439,13 @@ def run_onedrive_fetch(
             for file_path in files:
                 try:
                     classification = runner.classify(file_path)
-                except ClassifyError:
-                    logger.exception("classify failed for %s (submission %s)", file_path, submission_id)
+                except ClassifyError as exc:
+                    logger.exception(
+                        "classify failed for %s (submission %s): %s",
+                        file_path,
+                        submission_id,
+                        _summarize_error_text(exc.stderr.strip() or str(exc), _ERROR_MESSAGE_LIMIT),
+                    )
                     _record_skipped_file(settings, submission_id, skipped_files, file_path, "CLASSIFY_FAILED")
                     continue
                 classified.append((file_path, classification))
@@ -431,16 +453,9 @@ def run_onedrive_fetch(
             classified = _apply_neighbor_fallback(classified)
 
             for file_path, classification in classified:
-                if classification.status != "ROUTABLE" or classification.record_type is None:
-                    _record_skipped_file(settings, submission_id, skipped_files, file_path, classification.status)
-                    continue
-
-                route_key = (classification.doc_type, classification.record_type, classification.layout_variant)
-                document_type = CLASSIFICATION_TO_DOCUMENT_TYPE.get(route_key)
-                if document_type is None:
-                    _record_skipped_file(
-                        settings, submission_id, skipped_files, file_path, "UNKNOWN_ROUTABLE_COMBINATION"
-                    )
+                document_type = _route(classification)
+                if not isinstance(document_type, DocumentType):
+                    _record_skipped_file(settings, submission_id, skipped_files, file_path, document_type)
                     continue
 
                 try:
@@ -571,6 +586,9 @@ def classify_skipped_file(
     submission = repositories.get_submission(session, submission_id)
     if submission is None:
         raise ApiError(404, "SUBMISSION_NOT_FOUND", "OneDrive submission not found.")
+
+    if submission.status == OneDriveSubmissionStatus.FETCHING.value:
+        raise ApiError(409, "SUBMISSION_BUSY", "This link's files are still being classified. Try again shortly.")
 
     entry = repositories.get_skipped_file(session, submission_id, filename)
     if entry is None:
@@ -778,6 +796,161 @@ def run_skipped_files_refetch(
         )
     finally:
         shutil.rmtree(dest_dir, ignore_errors=True)
+
+
+def _is_reclassifiable(item: dict[str, str]) -> bool:
+    return item.get("status") in _RECLASSIFIABLE_STATUSES and item.get(_REFETCH_STATUS) not in (
+        _REFETCH_QUEUED,
+        _REFETCH_IN_PROGRESS,
+    )
+
+
+def reclassify_skipped_files(
+    session: Session, submission_id: UUID, executor: OneDriveExecutorProtocol
+) -> OneDriveSubmission:
+    """Queue a re-run of auto-classification over a FETCHED submission's
+    CLASSIFY_FAILED / NEEDS_MANUAL_CLASSIFICATION skipped files (see
+    run_skipped_files_reclassify). retry_submission only covers FAILED
+    submissions, and classify_skipped_file needs a human to pick each
+    file's type -- neither helps when a whole link's files were skipped
+    because classify itself was broken at the time. The submission is
+    FETCHING while this runs, which also blocks manual classification of
+    the same files meanwhile."""
+    submission = repositories.get_submission(session, submission_id)
+    if submission is None:
+        raise ApiError(404, "SUBMISSION_NOT_FOUND", "OneDrive submission not found.")
+    if submission.status != OneDriveSubmissionStatus.FETCHED.value:
+        raise ApiError(409, "SUBMISSION_NOT_FETCHED", "Only a fetched link's skipped files can be reclassified.")
+    if not any(_is_reclassifiable(item) for item in submission.skipped_files or []):
+        raise ApiError(409, "NOTHING_TO_RECLASSIFY", "This link has no skipped files to reclassify.")
+
+    submission = repositories.mark_fetching(session, submission_id)
+    session.commit()
+
+    try:
+        logger.info("queued skipped-file reclassify for onedrive submission %s", submission_id)
+        executor.submit_reclassify(submission_id)
+    except Exception as exc:
+        repositories.restore_fetched(session, submission_id)
+        session.commit()
+        raise ApiError(500, "INTERNAL_ERROR", "Failed to queue the skipped files for reclassification.") from exc
+    return submission
+
+
+def _restore_fetched_safe(session_factory: sessionmaker[Session] | SessionFactory, submission_id: UUID) -> None:
+    with session_factory() as session:
+        try:
+            repositories.restore_fetched(session, submission_id)
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception("failed to restore onedrive submission %s to FETCHED", submission_id)
+
+
+def run_skipped_files_reclassify(
+    submission_id: UUID,
+    settings: Settings,
+    session_factory: sessionmaker[Session] | SessionFactory,
+    job_executor: JobExecutorProtocol,
+    runner: OneDriveFetchRunner | None = None,
+) -> None:
+    """Background half of reclassify_skipped_files: re-classifies each
+    reclassifiable skipped file from its preserved bytes (see
+    _record_skipped_file), applies the same neighbour fallback a full fetch
+    does, and ingests whatever is now routable exactly like run_onedrive_fetch
+    would have. Files still unroutable keep their entry with the new skip
+    status; files whose bytes are gone, or whose classify still fails, are
+    left untouched (a reviewer can still classify those by hand)."""
+    runner = runner or OneDriveFetchRunner(settings)
+    try:
+        with session_factory() as session:
+            submission = repositories.get_submission(session, submission_id)
+            if submission is None:
+                return
+            batch_id = submission.batch_id
+            entries = {
+                item["filename"]: dict(item) for item in submission.skipped_files or [] if _is_reclassifiable(item)
+            }
+
+        classified: list[tuple[Path, Classification]] = []
+        for filename in sorted(entries):
+            storage_key = entries[filename].get("storage_key")
+            source_path = settings.storage_root.resolve() / storage_key if storage_key else None
+            if (
+                storage_key
+                and source_path is not None
+                and not source_path.is_file()
+                and settings.storage_backend == "s3"
+            ):
+                with contextlib.suppress(Exception):
+                    get_storage_service(settings).materialize(storage_key, source_path)
+            if source_path is None or not source_path.is_file():
+                continue
+            try:
+                classified.append((source_path, runner.classify(source_path)))
+            except ClassifyError as exc:
+                logger.warning(
+                    "reclassify failed for %s (submission %s): %s",
+                    filename,
+                    submission_id,
+                    _summarize_error_text(exc.stderr.strip() or str(exc), _ERROR_MESSAGE_LIMIT),
+                )
+
+        classified = _apply_neighbor_fallback(classified)
+
+        ingested = 0
+        with session_factory() as session:
+            for source_path, classification in classified:
+                filename = source_path.name
+                entry = repositories.get_skipped_file(session, submission_id, filename)
+                if entry is None:
+                    continue
+                document_type = _route(classification)
+                if not isinstance(document_type, DocumentType):
+                    if document_type != entry.get("status"):
+                        repositories.update_skipped_file(session, submission_id, filename, {"status": document_type})
+                        session.commit()
+                    continue
+                try:
+                    _ingest_one_file(
+                        session,
+                        settings,
+                        job_executor,
+                        batch_id=batch_id,
+                        submission_id=submission_id,
+                        source_path=source_path,
+                        document_type=document_type,
+                    )
+                except UploadValidationError as exc:
+                    session.rollback()
+                    repositories.update_skipped_file(session, submission_id, filename, {"status": exc.code})
+                    session.commit()
+                    continue
+                except Exception:
+                    session.rollback()
+                    logger.exception("failed to ingest reclassified %s (submission %s)", filename, submission_id)
+                    repositories.update_skipped_file(session, submission_id, filename, {"status": "INGEST_FAILED"})
+                    session.commit()
+                    continue
+                repositories.remove_skipped_file(session, submission_id, filename)
+                session.commit()
+                ingested += 1
+                storage_key = entry.get("storage_key")
+                if storage_key and settings.storage_backend == "s3":
+                    with contextlib.suppress(Exception):
+                        get_storage_service(settings).delete(storage_key)
+            repositories.restore_fetched(session, submission_id)
+            recompute_batch_status(session, batch_id)
+            session.commit()
+        logger.info(
+            "reclassified onedrive submission %s: %d of %d skipped file(s) ingested",
+            submission_id,
+            ingested,
+            len(entries),
+        )
+    except Exception:
+        logger.exception("unexpected error reclassifying skipped files for onedrive submission %s", submission_id)
+        _restore_fetched_safe(session_factory, submission_id)
 
 
 def delete_submission(session: Session, settings: Settings, submission_id: UUID) -> None:

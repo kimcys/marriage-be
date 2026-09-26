@@ -67,5 +67,5 @@ strict_equality = true
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["filetype", "openpyxl", "boto3", "botocore.*", "celery"]
+module = ["filetype", "openpyxl", "boto3", "botocore.*", "celery", "celery.*"]
 ignore_missing_imports = true

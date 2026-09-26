@@ -9,6 +9,7 @@ from marriage_ocr_api.jobs.celery_app import celery_app
 from marriage_ocr_api.onedrive.service import (
     recover_stale_submissions,
     run_onedrive_fetch,
+    run_skipped_files_reclassify,
     run_skipped_files_refetch,
 )
 
@@ -58,6 +59,23 @@ def refetch_skipped_files(submission_id: str) -> None:
     settings = get_settings()
     session_factory = get_session_factory(settings)
     run_skipped_files_refetch(UUID(submission_id), settings, session_factory, CeleryJobExecutor())
+
+
+@celery_app.task(
+    name="marriage_ocr_api.onedrive.reclassify_skipped_files",
+    bind=False,
+    # One classify subprocess per skipped file, so sized like a full fetch.
+    time_limit=_settings.onedrive_fetch_timeout_seconds + 60,
+    soft_time_limit=_settings.onedrive_fetch_timeout_seconds + 30,
+)
+def reclassify_skipped_files(submission_id: str) -> None:
+    """Re-runs auto-classification over one submission's skipped files --
+    see onedrive/service.py::run_skipped_files_reclassify."""
+    from marriage_ocr_api.jobs.celery_executor import CeleryJobExecutor
+
+    settings = get_settings()
+    session_factory = get_session_factory(settings)
+    run_skipped_files_reclassify(UUID(submission_id), settings, session_factory, CeleryJobExecutor())
 
 
 @celery_app.task(name="marriage_ocr_api.onedrive.recover_stale_submissions", bind=False)

@@ -33,6 +33,7 @@ from marriage_ocr_api.onedrive.service import (
     classify_skipped_file,
     delete_submission,
     get_or_create_submission,
+    reclassify_skipped_files,
     retry_submission,
 )
 from marriage_ocr_api.onedrive.status import OneDriveSubmissionStatus
@@ -250,6 +251,36 @@ def classify_skipped_onedrive_file(
     )
     session.commit()
     return result
+
+
+@router.post(
+    "/{batch_id}/onedrive-links/{submission_id}/skipped-files/reclassify",
+    response_model=OneDriveSubmissionResponse,
+    operation_id="reclassify_skipped_files",
+)
+def reclassify_skipped_onedrive_files(
+    batch_id: UUID,
+    submission_id: UUID,
+    session: Session = Depends(get_db_session),
+    executor: OneDriveExecutorProtocol = Depends(get_onedrive_executor),
+    user: User = Depends(require_user),
+) -> JSONResponse:
+    """Re-runs auto-classification in the background over this link's
+    CLASSIFY_FAILED / NEEDS_MANUAL_CLASSIFICATION skipped files, ingesting
+    whichever now route. The link shows FETCHING until that finishes."""
+    batch = get_batch(session, batch_id)
+    if batch is None:
+        raise _batch_not_found(batch_id)
+
+    submission = repositories.get_submission(session, submission_id)
+    if submission is None or submission.batch_id != batch_id:
+        raise ApiError(404, "SUBMISSION_NOT_FOUND", f"OneDrive submission {submission_id} not found in this batch.")
+
+    submission = reclassify_skipped_files(session, submission_id, executor)
+    _log_link(session, user, "onedrive.skipped_reclassified", "Reclassified skipped files", submission)
+    session.commit()
+    response = build_submission_response(submission)
+    return JSONResponse(status_code=202, content=response.model_dump(mode="json"))
 
 
 @router.delete(

@@ -2789,6 +2789,65 @@
         ]
       }
     },
+    "/api/v1/batches/{batch_id}/onedrive-links/{submission_id}/skipped-files/reclassify": {
+      "post": {
+        "description": "Re-runs auto-classification in the background over this link's\nCLASSIFY_FAILED / NEEDS_MANUAL_CLASSIFICATION skipped files, ingesting\nwhichever now route. The link shows FETCHING until that finishes.",
+        "operationId": "reclassify_skipped_files",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Submission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OneDriveSubmissionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reclassify Skipped Onedrive Files",
+        "tags": [
+          "onedrive"
+        ]
+      }
+    },
     "/api/v1/exports": {
       "get": {
         "operationId": "list_exports",

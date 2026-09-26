@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from celery import Celery
+from celery.signals import worker_init
 
 from marriage_ocr_api.core.config import get_settings
 
@@ -25,6 +26,17 @@ celery_app.conf.task_reject_on_worker_lost = True
 # rather than letting a wedged worker process hold a slot forever.
 celery_app.conf.task_time_limit = settings.ocr_timeout_seconds + 60
 celery_app.conf.task_soft_time_limit = settings.ocr_timeout_seconds + 30
+
+
+@worker_init.connect
+def _check_worker_prerequisites(**_: object) -> None:
+    # Only the real (production) worker shells out to marriage-ocr with real
+    # Google credentials; dev/test workers run fake OCR CLIs without them.
+    if settings.app_env == "production":
+        from marriage_ocr_api.jobs.preflight import check_google_credentials
+
+        check_google_credentials(settings)
+
 
 celery_app.conf.beat_schedule = {
     "recover-stale-ocr-jobs": {

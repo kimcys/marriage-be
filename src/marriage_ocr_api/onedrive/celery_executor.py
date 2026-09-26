@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from marriage_ocr_api.onedrive.tasks import fetch_onedrive_submission, refetch_skipped_files
+from marriage_ocr_api.onedrive.tasks import fetch_onedrive_submission, reclassify_skipped_files, refetch_skipped_files
 
 
 class CeleryOneDriveExecutor:
@@ -16,6 +16,9 @@ class CeleryOneDriveExecutor:
 
     def submit_refetch(self, submission_id: UUID) -> None:
         refetch_skipped_files.delay(str(submission_id))
+
+    def submit_reclassify(self, submission_id: UUID) -> None:
+        reclassify_skipped_files.delay(str(submission_id))
 
     def shutdown(self) -> None:
         pass

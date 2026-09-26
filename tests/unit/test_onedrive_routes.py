@@ -22,12 +22,16 @@ class FakeOneDriveExecutor:
     def __init__(self) -> None:
         self.submitted: list[UUID] = []
         self.refetched: list[UUID] = []
+        self.reclassified: list[UUID] = []
 
     def submit(self, submission_id: UUID) -> None:
         self.submitted.append(submission_id)
 
     def submit_refetch(self, submission_id: UUID) -> None:
         self.refetched.append(submission_id)
+
+    def submit_reclassify(self, submission_id: UUID) -> None:
+        self.reclassified.append(submission_id)
 
 
 class FakeJobExecutor:
@@ -350,3 +354,30 @@ def test_classify_skipped_file_route_scoped_to_the_wrong_batch_returns_404(
     )
 
     assert response.status_code == 404
+
+
+def test_reclassify_skipped_files_route_queues_a_fetched_submission(client: TestClient, engine) -> None:
+    batch_id = _create_batch(client)
+    created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!reclass"})
+    submission_id = created.json()["id"]
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    mark_fetched(session, UUID(submission_id), skipped_files=[{"filename": "a.jpg", "status": "CLASSIFY_FAILED"}])
+    session.commit()
+    session.close()
+
+    response = client.post(f"/api/v1/batches/{batch_id}/onedrive-links/{submission_id}/skipped-files/reclassify")
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "FETCHING"
+    executor: FakeOneDriveExecutor = client.app.state.onedrive_executor
+    assert [str(item) for item in executor.reclassified] == [submission_id]
+
+
+def test_reclassify_skipped_files_route_rejects_a_pending_submission(client: TestClient) -> None:
+    batch_id = _create_batch(client)
+    created = client.post(f"/api/v1/batches/{batch_id}/onedrive-links", json={"url": "https://1drv.ms/f/s!pend"})
+
+    response = client.post(f"/api/v1/batches/{batch_id}/onedrive-links/{created.json()['id']}/skipped-files/reclassify")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "SUBMISSION_NOT_FETCHED"

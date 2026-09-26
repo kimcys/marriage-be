@@ -23,16 +23,18 @@ from marriage_ocr_api.onedrive.repositories import (
     mark_fetching,
     update_skipped_file,
 )
-from marriage_ocr_api.onedrive.runner import Classification, OneDriveFetchError
+from marriage_ocr_api.onedrive.runner import Classification, ClassifyError, OneDriveFetchError
 from marriage_ocr_api.onedrive.service import (
     _apply_neighbor_fallback,
     _ingest_one_file,
     build_submission_response,
     classify_skipped_file,
     delete_submission,
+    reclassify_skipped_files,
     recover_stale_submissions,
     retry_submission,
     run_onedrive_fetch,
+    run_skipped_files_reclassify,
     run_skipped_files_refetch,
 )
 from marriage_ocr_api.onedrive.status import OneDriveSubmissionStatus
@@ -437,12 +439,16 @@ class FakeOneDriveExecutor:
     def __init__(self) -> None:
         self.submitted: list[UUID] = []
         self.refetched: list[UUID] = []
+        self.reclassified: list[UUID] = []
 
     def submit(self, submission_id: UUID) -> None:
         self.submitted.append(submission_id)
 
     def submit_refetch(self, submission_id: UUID) -> None:
         self.refetched.append(submission_id)
+
+    def submit_reclassify(self, submission_id: UUID) -> None:
+        self.reclassified.append(submission_id)
 
 
 class FailingOneDriveExecutor:
@@ -896,4 +902,144 @@ def test_recover_stale_submissions_releases_stuck_refetches(tmp_path: Path) -> N
 
     entry = get_submission(session, submission.id).skipped_files[0]
     assert entry["refetch_status"] == "FAILED"
+    session.close()
+
+
+class BrokenClassifyRunner(FakeFetchRunner):
+    def classify(self, file_path: Path) -> Classification:
+        raise ClassifyError("classify exited with code 1", stderr="PermissionError: google-vision.json")
+
+
+def _submission_with_classify_failed_files(tmp_path: Path, filenames: list[str]):
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!broken-classify")
+    session.commit()
+    session.close()
+    settings = Settings(storage_root=tmp_path)
+    runner = BrokenClassifyRunner(files={name: _FAKE_PDF_BYTES for name in filenames}, classifications={})
+    run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), runner)
+    return session_factory, settings, batch, submission
+
+
+def test_reclassify_ingests_files_whose_classify_had_failed(tmp_path: Path) -> None:
+    session_factory, settings, batch, submission = _submission_with_classify_failed_files(
+        tmp_path, ["image00001.pdf", "image00002.pdf"]
+    )
+    session = session_factory()
+    fetched = get_submission(session, submission.id)
+    assert [item["status"] for item in fetched.skipped_files] == ["CLASSIFY_FAILED", "CLASSIFY_FAILED"]
+
+    executor = FakeOneDriveExecutor()
+    queued = reclassify_skipped_files(session, submission.id, executor)
+    assert queued.status == OneDriveSubmissionStatus.FETCHING.value
+    assert executor.reclassified == [submission.id]
+    session.close()
+
+    runner = FakeFetchRunner(
+        files={},
+        classifications={"image00001.pdf": _classification(), "image00002.pdf": _classification("cerai")},
+    )
+    job_executor = FakeJobExecutor()
+    run_skipped_files_reclassify(submission.id, settings, session_factory, job_executor, runner)
+
+    session = session_factory()
+    updated = get_submission(session, submission.id)
+    assert updated.status == OneDriveSubmissionStatus.FETCHED.value
+    assert updated.skipped_files is None
+    documents = list_documents(session, batch.id, limit=10, offset=0)
+    assert sorted(d.document_type for d in documents) == sorted(
+        [DocumentType.HANDWRITTEN_REGISTER.value, DocumentType.HANDWRITTEN_CERAI_LEGACY.value]
+    )
+    assert len(job_executor.submitted) == 2
+    session.close()
+
+
+def test_reclassify_updates_status_of_files_that_still_dont_route(tmp_path: Path) -> None:
+    session_factory, settings, _, submission = _submission_with_classify_failed_files(
+        tmp_path, ["image00001.pdf", "image00002.pdf"]
+    )
+    session = session_factory()
+    reclassify_skipped_files(session, submission.id, FakeOneDriveExecutor())
+    session.close()
+
+    class HalfBrokenRunner(FakeFetchRunner):
+        def classify(self, file_path: Path) -> Classification:
+            if file_path.name == "image00001.pdf":
+                return _UNKNOWN
+            raise ClassifyError("classify exited with code 1")
+
+    run_skipped_files_reclassify(
+        submission.id, settings, session_factory, FakeJobExecutor(), HalfBrokenRunner(files={}, classifications={})
+    )
+
+    session = session_factory()
+    updated = get_submission(session, submission.id)
+    assert updated.status == OneDriveSubmissionStatus.FETCHED.value
+    assert {item["filename"]: item["status"] for item in updated.skipped_files} == {
+        "image00001.pdf": _UNKNOWN.status,
+        "image00002.pdf": "CLASSIFY_FAILED",
+    }
+    session.close()
+
+
+def test_reclassify_rejects_a_submission_that_is_not_fetched() -> None:
+    engine = _engine()
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!pending")
+    session.commit()
+
+    with pytest.raises(ApiError) as exc_info:
+        reclassify_skipped_files(session, submission.id, FakeOneDriveExecutor())
+    assert exc_info.value.code == "SUBMISSION_NOT_FETCHED"
+    session.close()
+
+
+def test_reclassify_rejects_a_submission_with_nothing_to_reclassify() -> None:
+    engine = _engine()
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!clean")
+    mark_fetched(session, submission.id, skipped_files=[{"filename": "a.pdf", "status": "SKIPPED_JAWI"}])
+    session.commit()
+
+    with pytest.raises(ApiError) as exc_info:
+        reclassify_skipped_files(session, submission.id, FakeOneDriveExecutor())
+    assert exc_info.value.code == "NOTHING_TO_RECLASSIFY"
+    session.close()
+
+
+def test_reclassify_restores_fetched_when_queueing_fails(tmp_path: Path) -> None:
+    session_factory, _, _, submission = _submission_with_classify_failed_files(tmp_path, ["image00001.pdf"])
+    session = session_factory()
+
+    class BrokenQueue(FakeOneDriveExecutor):
+        def submit_reclassify(self, submission_id: UUID) -> None:
+            raise RuntimeError("queue is down")
+
+    with pytest.raises(ApiError):
+        reclassify_skipped_files(session, submission.id, BrokenQueue())
+    assert get_submission(session, submission.id).status == OneDriveSubmissionStatus.FETCHED.value
+    assert len(get_submission(session, submission.id).skipped_files) == 1
+    session.close()
+
+
+def test_classify_skipped_file_is_blocked_while_reclassifying(tmp_path: Path) -> None:
+    session_factory, settings, _, submission = _submission_with_classify_failed_files(tmp_path, ["image00001.pdf"])
+    session = session_factory()
+    reclassify_skipped_files(session, submission.id, FakeOneDriveExecutor())
+
+    with pytest.raises(ApiError) as exc_info:
+        classify_skipped_file(
+            session,
+            settings,
+            FakeJobExecutor(),
+            submission.id,
+            filename="image00001.pdf",
+            document_type=DocumentType.HANDWRITTEN_REGISTER,
+        )
+    assert exc_info.value.code == "SUBMISSION_BUSY"
     session.close()

@@ -79,6 +79,20 @@ def mark_fetched(
     return submission
 
 
+def restore_fetched(session: Session, submission_id: UUID) -> OneDriveSubmission:
+    """Puts a submission back to FETCHED after a skipped-files reclassify
+    (see onedrive/service.py::reclassify_skipped_files) without touching
+    skipped_files or fetched_at -- unlike mark_fetched, which replaces both
+    at the end of a full fetch."""
+    submission = session.get(OneDriveSubmission, submission_id)
+    if submission is None:
+        raise ValueError(f"onedrive submission {submission_id} does not exist")
+    submission.status = OneDriveSubmissionStatus.FETCHED.value
+    submission.updated_at = utcnow()
+    session.flush()
+    return submission
+
+
 def get_skipped_file(session: Session, submission_id: UUID, filename: str) -> dict[str, str] | None:
     submission = session.get(OneDriveSubmission, submission_id)
     if submission is None or not submission.skipped_files:
