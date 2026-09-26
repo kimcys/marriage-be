@@ -201,9 +201,14 @@ jobs:
             cd /root/marriage-be
             git pull --ff-only origin main
             export IMAGE_TAG=${{ github.sha }}
+            # -a: old releases are tagged (by commit sha), so a plain prune
+            # never removed them and each ~6GB image piled up until the disk
+            # filled mid-pull. Only images no container uses are removed --
+            # never volumes or data. Run before the pull too, to make room.
+            docker image prune -af
             docker compose -f docker-compose.production.yml --env-file .env.production pull api beat
             docker compose -f docker-compose.production.yml --env-file .env.production up -d api beat
-            docker image prune -f
+            docker image prune -af
 
       - name: Deploy worker(s)
         if: steps.worker.outputs.ips != ''
@@ -217,9 +222,14 @@ jobs:
             cd /root/marriage-be
             git pull --ff-only origin main
             export IMAGE_TAG=${{ github.sha }}
+            # -a: old releases are tagged (by commit sha), so a plain prune
+            # never removed them and each ~6GB image piled up until the disk
+            # filled mid-pull. Only images no container uses are removed --
+            # never volumes or data. Run before the pull too, to make room.
+            docker image prune -af
             docker compose -f docker-compose.production.yml --env-file .env.production pull worker
             docker compose -f docker-compose.production.yml --env-file .env.production up -d worker
-            docker image prune -f
+            docker image prune -af
 
       # Checked from inside the Droplet, not from this runner -- the Cloud
       # Firewall only allows 80/443 in (Caddy's ports), by design, so port
