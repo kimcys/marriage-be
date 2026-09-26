@@ -13,6 +13,7 @@ from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.repositories import create_job
 from marriage_ocr_api.jobs.paths import JobPaths, build_job_paths
 from marriage_ocr_api.jobs.status import JobStatus
+from marriage_ocr_api.storage.factory import get_storage_service
 
 
 def document_paths(storage_root: Path, batch_id: UUID, document_id: UUID, extension: str = ".pdf") -> JobPaths:
@@ -85,6 +86,12 @@ def create_document_page_jobs(
             input_path = job_paths.input_dir / page_source_path.name
             shutil.move(str(page_source_path), input_path)
             input_relative_path = input_path.relative_to(job_paths.storage_root).as_posix()
+            # The worker that runs this page-job may be on another Droplet
+            # (e.g. a reviewer's manual classify splits the PDF on the API
+            # node) and materializes its input from object storage -- see
+            # jobs/processing.py::_ensure_input_materialized.
+            if settings.storage_backend == "s3":
+                get_storage_service(settings).put_file(input_path, input_relative_path, content_type="application/pdf")
             create_job(
                 session,
                 id=page_job_id,

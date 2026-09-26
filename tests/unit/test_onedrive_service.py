@@ -1043,3 +1043,49 @@ def test_classify_skipped_file_is_blocked_while_reclassifying(tmp_path: Path) ->
         )
     assert exc_info.value.code == "SUBMISSION_BUSY"
     session.close()
+
+
+def test_split_page_inputs_reach_object_storage_for_a_worker_on_another_droplet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reviewer's manual classify splits a multi-page PDF on the API node;
+    each page-job then runs on a worker Droplet that can only materialize
+    its input from object storage."""
+    import pymupdf
+
+    import marriage_ocr_api.batches.document_ingest as document_ingest
+    import marriage_ocr_api.onedrive.service as onedrive_service
+
+    storage = _FakeObjectStorage()
+    monkeypatch.setattr(onedrive_service, "get_storage_service", lambda _settings: storage)
+    monkeypatch.setattr(document_ingest, "get_storage_service", lambda _settings: storage)
+
+    source = tmp_path / "ledger.pdf"
+    document = pymupdf.open()
+    for index in range(3):
+        document.new_page().insert_text((72, 72), f"page {index + 1}")
+    document.save(source)
+    document.close()
+
+    engine = _engine()
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!split-pages")
+    session.commit()
+
+    job_executor = FakeJobExecutor()
+    _ingest_one_file(
+        session,
+        Settings(storage_root=tmp_path / "api", storage_backend="s3"),
+        job_executor,
+        batch_id=batch.id,
+        submission_id=submission.id,
+        source_path=source,
+        document_type=DocumentType.HANDWRITTEN_REGISTER,
+    )
+
+    jobs = [job for job in list_jobs(session, None, limit=10, offset=0) if job.page_number is not None]
+    assert len(jobs) == 3
+    for job in jobs:
+        assert job.input_relative_path in storage.objects
+    session.close()
