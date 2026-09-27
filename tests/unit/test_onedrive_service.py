@@ -84,6 +84,9 @@ class FakeFetchRunner:
     def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
         return self._classifications[file_path.name]
 
+    def classify_stack(self, file_paths: list[Path]) -> list[Classification]:
+        return [self.classify(path) for path in file_paths]
+
 
 class FailingFetchRunner:
     def fetch_public(self, url: str, dest: Path) -> None:
@@ -1249,3 +1252,88 @@ def test_duplicate_files_are_skipped_before_classify(tmp_path: Path) -> None:
     response = build_submission_response(updated)
     assert all(not f.classifiable for f in response.skipped_files)
     session.close()
+
+
+class RecordingStackRunner(FakeFetchRunner):
+    def __init__(self, *args, fail_stacks: bool = False, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.single_calls: list[str] = []
+        self.stack_calls: list[list[str]] = []
+        self._fail_stacks = fail_stacks
+
+    def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
+        self.single_calls.append(file_path.name)
+        return super().classify(file_path, page_ocr_output)
+
+    def classify_stack(self, file_paths: list[Path]) -> list[Classification]:
+        self.stack_calls.append([path.name for path in file_paths])
+        if self._fail_stacks:
+            raise ClassifyError("classify-stack exited with code 1", stderr="stacked image too large")
+        return [self._classifications[path.name] for path in file_paths]
+
+
+def _run_with_stack_runner(tmp_path: Path, runner: RecordingStackRunner, stack_size: int = 3):
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!stacked")
+    session.commit()
+    session.close()
+    job_executor = FakeJobExecutor()
+    settings = Settings(storage_root=tmp_path, onedrive_classify_stack_size=stack_size)
+    run_onedrive_fetch(submission.id, settings, session_factory, job_executor, runner)
+    return job_executor
+
+
+_IMAGES = ["p1.jpg", "p2.jpg", "p3.jpg", "p4.jpg"]
+
+
+def _jpeg_bytes() -> bytes:
+    # Only the magic bytes matter to ingest's content-type sniffing (filetype).
+    return b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00" + b"\x00" * 64 + b"\xff\xd9"
+
+
+def _sample_bytes(name: str) -> bytes:
+    return _FAKE_PDF_BYTES if name.endswith(".pdf") else _jpeg_bytes()
+
+
+def test_images_are_classified_in_stacks_of_three_and_pdfs_alone(tmp_path: Path) -> None:
+    names = [*_IMAGES, "typed.pdf"]
+    runner = RecordingStackRunner(
+        files={name: _sample_bytes(name) for name in names},
+        classifications={name: _classification() for name in names},
+    )
+
+    job_executor = _run_with_stack_runner(tmp_path, runner)
+
+    assert runner.stack_calls == [["p1.jpg", "p2.jpg", "p3.jpg"]]
+    # The leftover single image and the PDF each get a normal classify.
+    assert sorted(runner.single_calls) == ["p4.jpg", "typed.pdf"]
+    assert len(job_executor.submitted) == 5
+
+
+def test_a_failed_stack_falls_back_to_one_by_one(tmp_path: Path) -> None:
+    runner = RecordingStackRunner(
+        files={name: _sample_bytes(name) for name in _IMAGES},
+        classifications={name: _classification() for name in _IMAGES},
+        fail_stacks=True,
+    )
+
+    job_executor = _run_with_stack_runner(tmp_path, runner)
+
+    assert runner.stack_calls == [["p1.jpg", "p2.jpg", "p3.jpg"]]
+    assert sorted(runner.single_calls) == _IMAGES
+    assert len(job_executor.submitted) == 4
+
+
+def test_stack_size_one_turns_stacking_off(tmp_path: Path) -> None:
+    runner = RecordingStackRunner(
+        files={name: _sample_bytes(name) for name in _IMAGES},
+        classifications={name: _classification() for name in _IMAGES},
+    )
+
+    _run_with_stack_runner(tmp_path, runner, stack_size=1)
+
+    assert runner.stack_calls == []
+    assert sorted(runner.single_calls) == _IMAGES

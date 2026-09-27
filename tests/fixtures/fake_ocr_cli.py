@@ -81,6 +81,22 @@ def _handle_classify(argv: list[str]) -> int:
     return 0
 
 
+def _handle_classify_stack(argv: list[str]) -> int:
+    """Same fixed classification as _handle_classify, once per --input."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", action="append", required=True)
+    args = parser.parse_args(argv)
+    payload = {
+        "doc_type": "typed",
+        "record_type": "nikah",
+        "layout_variant": "modern",
+        "status": "ROUTABLE",
+        "config_path": "config/typed_borang4b.yaml",
+    }
+    print(json.dumps([payload for _ in args.input]))
+    return 0
+
+
 def _handle_onedrive(argv: list[str]) -> int:
     if not argv:
         print("missing onedrive subcommand", file=sys.stderr)
@@ -107,6 +123,8 @@ def main() -> int:
     argv = sys.argv[1:]
     if argv and argv[0] == "classify":
         return _handle_classify(argv[1:])
+    if argv and argv[0] == "classify-stack":
+        return _handle_classify_stack(argv[1:])
     if argv and argv[0] == "onedrive":
         return _handle_onedrive(argv[1:])
 

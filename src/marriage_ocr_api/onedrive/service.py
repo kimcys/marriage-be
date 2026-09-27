@@ -390,6 +390,54 @@ def _record_duplicate(skipped_files: list[dict[str, str]], file_path: Path, dupl
     skipped_files.append({"filename": file_path.name, "status": _DUPLICATE, "duplicate_of": duplicate_of})
 
 
+def _classify_files(
+    runner: OneDriveFetchRunner,
+    files: list[Path],
+    page_ocr_by_file: dict[Path, Path],
+    stack_size: int,
+) -> dict[Path, Classification | ClassifyError]:
+    """Classify every file, stacking consecutive single-image files up to
+    `stack_size` per Vision call (marriage-ocr `classify-stack`) -- PDFs are
+    always classified on their own, since that call doubles as a typed PDF's
+    page-1 OCR. A stack that fails for any reason (too large, API error) is
+    retried file by file, so stacking can only ever save calls, not lose a
+    classification."""
+    results: dict[Path, Classification | ClassifyError] = {}
+
+    def classify_one(file_path: Path) -> None:
+        try:
+            results[file_path] = runner.classify(file_path, page_ocr_output=page_ocr_by_file.get(file_path))
+        except ClassifyError as exc:
+            results[file_path] = exc
+
+    def flush(stack: list[Path]) -> None:
+        if len(stack) == 1:
+            classify_one(stack[0])
+        elif stack:
+            try:
+                results.update(zip(stack, runner.classify_stack(stack), strict=True))
+            except ClassifyError as exc:
+                logger.warning(
+                    "stacked classify of %d file(s) failed, classifying one by one: %s",
+                    len(stack),
+                    _summarize_error_text(exc.stderr.strip() or str(exc), _ERROR_MESSAGE_LIMIT),
+                )
+                for file_path in stack:
+                    classify_one(file_path)
+        stack.clear()
+
+    stack: list[Path] = []
+    for file_path in files:
+        if stack_size <= 1 or file_path.suffix.lower() == ".pdf":
+            classify_one(file_path)
+            continue
+        stack.append(file_path)
+        if len(stack) == stack_size:
+            flush(stack)
+    flush(stack)
+    return results
+
+
 def _apply_neighbor_fallback(
     classified: list[tuple[Path, Classification]],
 ) -> list[tuple[Path, Classification]]:
@@ -500,24 +548,28 @@ def run_onedrive_fetch(
             classified: list[tuple[Path, Classification]] = []
             page_ocr_by_file: dict[Path, Path] = {}
             seen_hashes: dict[str, str] = {}
+            to_classify: list[Path] = []
             for index, file_path in enumerate(files):
                 duplicate_of = _duplicate_of(session, file_path, seen_hashes)
                 if duplicate_of is not None:
                     _record_duplicate(skipped_files, file_path, duplicate_of)
                     continue
                 page_ocr_by_file[file_path] = _page_ocr_staging_path(settings, submission_id, index)
-                try:
-                    classification = runner.classify(file_path, page_ocr_output=page_ocr_by_file[file_path])
-                except ClassifyError as exc:
-                    logger.exception(
+                to_classify.append(file_path)
+
+            results = _classify_files(runner, to_classify, page_ocr_by_file, settings.onedrive_classify_stack_size)
+            for file_path in to_classify:
+                result = results[file_path]
+                if isinstance(result, ClassifyError):
+                    logger.error(
                         "classify failed for %s (submission %s): %s",
                         file_path,
                         submission_id,
-                        _summarize_error_text(exc.stderr.strip() or str(exc), _ERROR_MESSAGE_LIMIT),
+                        _summarize_error_text(result.stderr.strip() or str(result), _ERROR_MESSAGE_LIMIT),
                     )
                     _record_skipped_file(settings, submission_id, skipped_files, file_path, "CLASSIFY_FAILED")
                     continue
-                classified.append((file_path, classification))
+                classified.append((file_path, result))
 
             classified = _apply_neighbor_fallback(classified)
 

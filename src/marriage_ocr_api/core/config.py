@@ -73,10 +73,14 @@ class Settings(BaseSettings):
     # ocr_timeout_seconds's global default (see jobs/celery_app.py's
     # task_time_limit, sized for one OCR subprocess run).
     onedrive_fetch_timeout_seconds: int = 21600
+    # How many single-image OneDrive files one Vision classify call covers
+    # (marriage-ocr `classify-stack`, max 3). 1 turns stacking off -- every
+    # file is classified on its own, as before. PDFs are never stacked.
+    onedrive_classify_stack_size: int = 3
     ocr_max_concurrent_jobs: int = 1
     ocr_stderr_api_limit: int = 1000
     marriage_ocr_git_url: str = "https://github.com/kimcys/marriage-ocr.git"
-    marriage_ocr_git_ref: str = "652ad3f117ee2b9ffabad3e643e4549af6c7e1ce"
+    marriage_ocr_git_ref: str = "5ee6b3290c52290bc7949a35ab90ab2108a5cdc2"
     google_application_credentials: str = "/run/secrets/google-vision.json"
     gemini_api_key: str = ""
     storage_backend: str = "local"
@@ -136,6 +140,13 @@ class Settings(BaseSettings):
         if value <= 0:
             field_name = (info.field_name or "value").upper()
             raise ValueError(f"{field_name} must be positive")
+        return value
+
+    @field_validator("onedrive_classify_stack_size", mode="after")
+    @classmethod
+    def validate_classify_stack_size(cls, value: int) -> int:
+        if not 1 <= value <= 3:
+            raise ValueError("ONEDRIVE_CLASSIFY_STACK_SIZE must be between 1 and 3")
         return value
 
     @field_validator("storage_backend", mode="after")

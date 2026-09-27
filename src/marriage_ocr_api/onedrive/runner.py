@@ -97,6 +97,24 @@ class OneDriveFetchRunner:
                 f"onedrive fetch-public exited with code {result.returncode}", stderr=result.stderr
             )
 
+    def classify_stack(self, file_paths: list[Path]) -> list[Classification]:
+        """One Vision classify for up to 3 single-image files (marriage-ocr
+        `classify-stack`); results in `file_paths` order. Raises ClassifyError
+        on any failure -- callers fall back to per-file classify()."""
+        args = ["classify-stack"]
+        for file_path in file_paths:
+            args.extend(["--input", str(file_path)])
+        result = self._run(args)
+        if result.returncode != 0:
+            raise ClassifyError(f"classify-stack exited with code {result.returncode}", stderr=result.stderr)
+        try:
+            payloads = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ClassifyError(f"classify-stack produced non-JSON output: {exc}", stderr=result.stderr) from exc
+        if not isinstance(payloads, list) or len(payloads) != len(file_paths):
+            raise ClassifyError("classify-stack returned the wrong number of results", stderr=result.stderr)
+        return [_classification_from_payload(payload) for payload in payloads]
+
     def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
         """`page_ocr_output`: where marriage-ocr saves page 1's Vision result
         if the file turns out to be a typed PDF (see jobs/paths.py::
@@ -111,10 +129,14 @@ class OneDriveFetchRunner:
             payload = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             raise ClassifyError(f"classify produced non-JSON output: {exc}", stderr=result.stderr) from exc
-        return Classification(
-            doc_type=payload["doc_type"],
-            record_type=payload.get("record_type"),
-            layout_variant=payload.get("layout_variant"),
-            status=payload["status"],
-            config_path=payload.get("config_path"),
-        )
+        return _classification_from_payload(payload)
+
+
+def _classification_from_payload(payload: dict) -> Classification:
+    return Classification(
+        doc_type=payload["doc_type"],
+        record_type=payload.get("record_type"),
+        layout_variant=payload.get("layout_variant"),
+        status=payload["status"],
+        config_path=payload.get("config_path"),
+    )
