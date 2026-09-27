@@ -200,6 +200,11 @@ def get_document(session: Session, document_id: UUID) -> Document | None:
     return session.get(Document, document_id)
 
 
+def find_document_id_by_sha256(session: Session, sha256: str) -> UUID | None:
+    """Any already-ingested document (in any batch) with these exact bytes."""
+    return session.scalar(select(Document.id).where(Document.sha256 == sha256).limit(1))
+
+
 def list_documents(session: Session, batch_id: UUID, limit: int, offset: int) -> list[Document]:
     stmt: Select[tuple[Document]] = select(Document).where(Document.batch_id == batch_id)
     stmt = stmt.order_by(Document.created_at.desc(), Document.id.desc()).limit(limit).offset(offset)

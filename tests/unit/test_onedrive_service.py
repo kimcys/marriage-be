@@ -61,8 +61,14 @@ class FakeJobExecutor:
 
 
 class FakeFetchRunner:
-    def __init__(self, files: dict[str, bytes], classifications: dict[str, Classification]) -> None:
-        self._files = files
+    def __init__(
+        self, files: dict[str, bytes], classifications: dict[str, Classification], *, unique_bytes: bool = True
+    ) -> None:
+        # Tests reuse one fake PDF for many filenames; make each file's bytes
+        # distinct unless a test is exercising duplicate detection itself.
+        self._files = (
+            {name: content + f"% {name}\n".encode() for name, content in files.items()} if unique_bytes else files
+        )
         self._classifications = classifications
         self.fetch_calls: list[tuple[str, Path]] = []
         self.only_calls: list[list[str] | None] = []
@@ -220,6 +226,7 @@ def test_run_onedrive_fetch_skips_unroutable_files_without_creating_documents(tm
                 config_path=None,
             )
         },
+        unique_bytes=False,
     )
     job_executor = FakeJobExecutor()
 
@@ -1189,4 +1196,56 @@ def test_typed_file_keeps_classifys_page1_ocr_next_to_its_input(tmp_path: Path, 
     assert page1_ocr_relative_path(documents["hand.pdf"].storage_key) not in storage.objects
     # Staging copies are cleaned up once the run finishes.
     assert not (tmp_path / "onedrive" / str(submission.id) / "page-ocr").exists()
+    session.close()
+
+
+def test_duplicate_files_are_skipped_before_classify(tmp_path: Path) -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    first = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!first")
+    second = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!second")
+    session.commit()
+    session.close()
+
+    settings = Settings(storage_root=tmp_path)
+    other_pdf = _FAKE_PDF_BYTES + b"% different\n"
+    run_onedrive_fetch(
+        first.id,
+        settings,
+        session_factory,
+        FakeJobExecutor(),
+        FakeFetchRunner(
+            files={"a.pdf": _FAKE_PDF_BYTES}, classifications={"a.pdf": _classification()}, unique_bytes=False
+        ),
+    )
+
+    class CountingRunner(FakeFetchRunner):
+        classified: list[str] = []
+
+        def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
+            CountingRunner.classified.append(file_path.name)
+            return super().classify(file_path, page_ocr_output)
+
+    # b.pdf repeats a.pdf from the first link; d.pdf repeats c.pdf in the same link.
+    runner = CountingRunner(
+        files={"b.pdf": _FAKE_PDF_BYTES, "c.pdf": other_pdf, "d.pdf": other_pdf},
+        classifications={name: _classification() for name in ("b.pdf", "c.pdf", "d.pdf")},
+        unique_bytes=False,
+    )
+    job_executor = FakeJobExecutor()
+    run_onedrive_fetch(second.id, settings, session_factory, job_executor, runner)
+
+    session = session_factory()
+    updated = get_submission(session, second.id)
+    statuses = {
+        item["filename"]: (item["status"], item["duplicate_of"].split(":")[0]) for item in updated.skipped_files
+    }
+    assert statuses == {"b.pdf": ("DUPLICATE", "document"), "d.pdf": ("DUPLICATE", "file")}
+    assert CountingRunner.classified == ["c.pdf"]
+    assert len(job_executor.submitted) == 1
+    assert not any(item.get("storage_key") for item in updated.skipped_files)
+    response = build_submission_response(updated)
+    assert all(not f.classifiable for f in response.skipped_files)
     session.close()

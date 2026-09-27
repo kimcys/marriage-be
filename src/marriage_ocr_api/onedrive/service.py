@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import re
 import shutil
@@ -16,7 +17,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from marriage_ocr_api.api.errors import ApiError
 from marriage_ocr_api.batches.document_ingest import create_document_page_jobs, document_paths, split_page_count
 from marriage_ocr_api.batches.models import Document
-from marriage_ocr_api.batches.repositories import create_document, recompute_batch_status, recompute_document_status
+from marriage_ocr_api.batches.repositories import (
+    create_document,
+    find_document_id_by_sha256,
+    recompute_batch_status,
+    recompute_document_status,
+)
 from marriage_ocr_api.batches.status import TYPED_DOCUMENT_TYPES, DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db import repositories as job_repositories
@@ -93,6 +99,11 @@ _REFETCH_FAILED = "FAILED"
 # Jawi-only pages are skipped completely: never routed by neighbour
 # fallback, never offered for manual classification, never reclassified.
 _SKIPPED_JAWI = "SKIPPED_JAWI"
+# Byte-identical to a file already ingested (any batch) or seen earlier in the
+# same run: skipped before classify, so it costs no Vision/Gemini call and
+# its bytes aren't stored again. Never classifiable or reclassifiable.
+_DUPLICATE = "DUPLICATE"
+_NOT_CLASSIFIABLE_STATUSES = frozenset({_SKIPPED_JAWI, _DUPLICATE})
 _RECLASSIFIABLE_STATUSES = frozenset({"CLASSIFY_FAILED", "NEEDS_MANUAL_CLASSIFICATION"})
 
 
@@ -143,7 +154,7 @@ def build_submission_response(submission: OneDriveSubmission) -> OneDriveSubmiss
             SkippedFile(
                 filename=item["filename"],
                 status=item["status"],
-                classifiable=item["status"] != _SKIPPED_JAWI
+                classifiable=item["status"] not in _NOT_CLASSIFIABLE_STATUSES
                 and item.get(_REFETCH_STATUS) not in (_REFETCH_QUEUED, _REFETCH_IN_PROGRESS),
                 refetch_status=item.get(_REFETCH_STATUS),
                 refetch_error=item.get(_REFETCH_ERROR),
@@ -353,6 +364,32 @@ def _record_skipped_file(
     skipped_files.append(entry)
 
 
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _duplicate_of(session: Session, file_path: Path, seen: dict[str, str]) -> str | None:
+    """What `file_path` duplicates -- an existing document's id, or the name
+    of a file earlier in this same run -- or None if its bytes are new.
+    Records the file's hash in `seen` either way."""
+    digest = _sha256_of(file_path)
+    existing = find_document_id_by_sha256(session, digest)
+    if existing is not None:
+        return f"document:{existing}"
+    if digest in seen:
+        return f"file:{seen[digest]}"
+    seen[digest] = file_path.name
+    return None
+
+
+def _record_duplicate(skipped_files: list[dict[str, str]], file_path: Path, duplicate_of: str) -> None:
+    skipped_files.append({"filename": file_path.name, "status": _DUPLICATE, "duplicate_of": duplicate_of})
+
+
 def _apply_neighbor_fallback(
     classified: list[tuple[Path, Classification]],
 ) -> list[tuple[Path, Classification]]:
@@ -462,7 +499,12 @@ def run_onedrive_fetch(
         with session_factory() as session:
             classified: list[tuple[Path, Classification]] = []
             page_ocr_by_file: dict[Path, Path] = {}
+            seen_hashes: dict[str, str] = {}
             for index, file_path in enumerate(files):
+                duplicate_of = _duplicate_of(session, file_path, seen_hashes)
+                if duplicate_of is not None:
+                    _record_duplicate(skipped_files, file_path, duplicate_of)
+                    continue
                 page_ocr_by_file[file_path] = _page_ocr_staging_path(settings, submission_id, index)
                 try:
                     classification = runner.classify(file_path, page_ocr_output=page_ocr_by_file[file_path])
@@ -625,6 +667,8 @@ def classify_skipped_file(
 
     if entry.get("status") == _SKIPPED_JAWI:
         raise ApiError(409, "SKIPPED_FILE_JAWI", f"{filename} is a Jawi page and is skipped from processing.")
+    if entry.get("status") == _DUPLICATE:
+        raise ApiError(409, "SKIPPED_FILE_DUPLICATE", f"{filename} is identical to a file already processed.")
 
     storage_key = entry.get("storage_key")
     source_path = settings.storage_root.resolve() / storage_key if storage_key else None
@@ -906,6 +950,7 @@ def run_skipped_files_reclassify(
 
         classified: list[tuple[Path, Classification]] = []
         page_ocr_by_file: dict[Path, Path] = {}
+        seen_hashes: dict[str, str] = {}
         for index, filename in enumerate(sorted(entries)):
             storage_key = entries[filename].get("storage_key")
             source_path = settings.storage_root.resolve() / storage_key if storage_key else None
@@ -919,6 +964,14 @@ def run_skipped_files_reclassify(
                     get_storage_service(settings).materialize(storage_key, source_path)
             if source_path is None or not source_path.is_file():
                 continue
+            with session_factory() as session:
+                duplicate_of = _duplicate_of(session, source_path, seen_hashes)
+                if duplicate_of is not None:
+                    repositories.update_skipped_file(
+                        session, submission_id, filename, {"status": _DUPLICATE, "duplicate_of": duplicate_of}
+                    )
+                    session.commit()
+                    continue
             page_ocr_by_file[source_path] = _page_ocr_staging_path(settings, submission_id, index)
             try:
                 classified.append(
