@@ -77,10 +77,17 @@ class Settings(BaseSettings):
     # (marriage-ocr `classify-stack`, max 3). 1 turns stacking off -- every
     # file is classified on its own, as before. PDFs are never stacked.
     onedrive_classify_stack_size: int = 3
+    # Gemini Batch Mode for handwritten pages (half price, results in minutes
+    # to hours instead of seconds) -- meant to be switched on only while a
+    # bulk backlog runs. Off: every handwritten job calls Gemini live, as
+    # before. See jobs/gemini_batch.py.
+    gemini_batch_enabled: bool = False
+    gemini_batch_max_jobs: int = 500
+    gemini_batch_fallback_hours: int = 30
     ocr_max_concurrent_jobs: int = 1
     ocr_stderr_api_limit: int = 1000
     marriage_ocr_git_url: str = "https://github.com/kimcys/marriage-ocr.git"
-    marriage_ocr_git_ref: str = "8fd5d40a6346dad7ec42445b8c0231d1cfeb0095"
+    marriage_ocr_git_ref: str = "64ff5c15b30f6e9b6f38bed94c2b8a7f2afd7a06"
     google_application_credentials: str = "/run/secrets/google-vision.json"
     gemini_api_key: str = ""
     storage_backend: str = "local"
@@ -133,6 +140,8 @@ class Settings(BaseSettings):
         "ocr_stderr_api_limit",
         "ocr_max_concurrent_jobs",
         "jwt_expires_minutes",
+        "gemini_batch_max_jobs",
+        "gemini_batch_fallback_hours",
         mode="after",
     )
     @classmethod

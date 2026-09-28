@@ -51,6 +51,12 @@ celery_app.conf.beat_schedule = {
         # Once a day is plenty for a retention window measured in weeks.
         "schedule": 86400.0,
     },
+    "gemini-batch-tick": {
+        "task": "marriage_ocr_api.jobs.gemini_batch_tick",
+        # Submits prepared handwritten jobs and finishes completed Gemini
+        # batches. A cheap no-op query when Batch Mode has nothing waiting.
+        "schedule": 300.0,
+    },
     "recover-stale-onedrive-submissions": {
         "task": "marriage_ocr_api.onedrive.recover_stale_submissions",
         # Same cadence as recover-stale-ocr-jobs, for the same reason.

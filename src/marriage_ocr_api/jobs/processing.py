@@ -13,6 +13,7 @@ from marriage_ocr_api.batches.repositories import recompute_batch_status, recomp
 from marriage_ocr_api.batches.status import TYPED_DOCUMENT_TYPES, DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db import repositories
+from marriage_ocr_api.db.models import OCRJob
 from marriage_ocr_api.jobs.paths import page1_ocr_relative_path
 from marriage_ocr_api.jobs.runner import (
     OCRRunRequest,
@@ -77,6 +78,62 @@ def _mark_failed_safe(
             logger.exception("failed to mark job %s as failed", job_id)
 
 
+def complete_job(
+    settings: Settings,
+    session_factory: sessionmaker[Session] | SessionFactory,
+    job: OCRJob,
+    output_path: Path,
+    is_typed: bool,
+) -> None:
+    """Mark a PROCESSING job completed from its OCR output file and import
+    its records -- shared by the live OCR run below and Gemini Batch Mode's
+    finish step (jobs/gemini_batch.py), so both complete a job identically."""
+    job_id = job.id
+    storage_root = settings.storage_root.resolve()
+    completed_at = datetime.now(UTC)
+    output_relative_path = output_path.relative_to(storage_root).as_posix()
+    if settings.storage_backend == "s3":
+        # Push the result up so any API instance can serve
+        # /jobs/{id}/download -- the worker that produced it may not
+        # be the same node as the one handling that request.
+        get_storage_service(settings).put_file(
+            output_path,
+            output_relative_path,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    with session_factory() as session:
+        repositories.mark_completed(
+            session,
+            job_id,
+            output_relative_path,
+            completed_at,
+        )
+        if is_typed:
+            import_records_from_csv(
+                session,
+                job_id,
+                output_path,
+                batch_id=job.batch_id,
+                document_id=job.document_id,
+                override_source_page=job.page_number,
+            )
+        else:
+            import_records_from_xlsx(
+                session,
+                job_id,
+                output_path,
+                batch_id=job.batch_id,
+                document_id=job.document_id,
+                override_source_page=job.page_number,
+            )
+        if job.document_id is not None:
+            recompute_document_status(session, job.document_id)
+        if job.batch_id is not None:
+            recompute_batch_status(session, job.batch_id)
+        session.commit()
+    logger.info("completed OCR job %s", job_id)
+
+
 def process_ocr_job(
     job_id: UUID,
     settings: Settings,
@@ -129,6 +186,15 @@ def process_ocr_job(
         output_extension = ".csv" if is_typed else ".xlsx"
         output_path = debug_path.parent / "output" / f"result{output_extension}"
         _ensure_input_materialized(settings, input_path, job.input_relative_path)
+        if not is_typed:
+            from marriage_ocr_api.jobs import gemini_batch
+
+            if gemini_batch.should_batch(settings, job) and gemini_batch.prepare_job(
+                settings, session_factory, job, input_path, runner.config_path_for(document_type)
+            ):
+                # Waiting on a Gemini batch now; jobs/gemini_batch.py::tick
+                # submits it, finishes it, or falls back to a live run.
+                return
         request = OCRRunRequest(
             input_path=input_path,
             output_path=output_path,
@@ -161,48 +227,7 @@ def process_ocr_job(
             return
         failure_code = failure_code_for_run(result, request.output_path)
         if failure_code is None:
-            completed_at = datetime.now(UTC)
-            output_relative_path = output_path.relative_to(storage_root).as_posix()
-            if settings.storage_backend == "s3":
-                # Push the result up so any API instance can serve
-                # /jobs/{id}/download -- the worker that produced it may not
-                # be the same node as the one handling that request.
-                get_storage_service(settings).put_file(
-                    output_path,
-                    output_relative_path,
-                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-            with session_factory() as session:
-                repositories.mark_completed(
-                    session,
-                    job_id,
-                    output_relative_path,
-                    completed_at,
-                )
-                if is_typed:
-                    import_records_from_csv(
-                        session,
-                        job_id,
-                        output_path,
-                        batch_id=job.batch_id,
-                        document_id=job.document_id,
-                        override_source_page=job.page_number,
-                    )
-                else:
-                    import_records_from_xlsx(
-                        session,
-                        job_id,
-                        output_path,
-                        batch_id=job.batch_id,
-                        document_id=job.document_id,
-                        override_source_page=job.page_number,
-                    )
-                if job.document_id is not None:
-                    recompute_document_status(session, job.document_id)
-                if job.batch_id is not None:
-                    recompute_batch_status(session, job.batch_id)
-                session.commit()
-            logger.info("completed OCR job %s", job_id)
+            complete_job(settings, session_factory, job, output_path, is_typed)
             return
 
         stderr_excerpt = read_sanitized_stderr(

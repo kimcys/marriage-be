@@ -53,6 +53,12 @@ class OCRJob(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Gemini Batch Mode progress for a PROCESSING handwritten job (see
+    # jobs/gemini_batch.py): PREPARED -> SUBMITTING -> SUBMITTED ->
+    # FINISHING, or SYNC once it has fallen back to the normal live call.
+    gemini_batch_stage: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
+    gemini_batch_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    gemini_batch_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 from marriage_ocr_api.activity.models import ActivityLog  # noqa: F401,E402

@@ -40,3 +40,21 @@ def recover_stale_jobs_task() -> int:
     if recovered:
         logger.warning("Recovered %s stale PROCESSING job(s) abandoned by a crashed worker", recovered)
     return recovered
+
+
+@celery_app.task(
+    name="marriage_ocr_api.jobs.gemini_batch_tick",
+    bind=False,
+    # Submitting uploads every prepared page image, and finishing runs one
+    # short marriage-ocr step per job -- give a large batch room.
+    time_limit=get_settings().ocr_timeout_seconds * 2,
+    soft_time_limit=get_settings().ocr_timeout_seconds * 2 - 30,
+)
+def gemini_batch_tick_task() -> dict[str, int]:
+    """Periodic Gemini Batch Mode scheduler -- see jobs/gemini_batch.py::tick.
+    Runs on the worker (it needs the marriage-ocr checkout and job files)."""
+    from marriage_ocr_api.jobs import gemini_batch
+    from marriage_ocr_api.jobs.celery_executor import CeleryJobExecutor
+
+    settings = get_settings()
+    return gemini_batch.tick(settings, get_session_factory(settings), CeleryJobExecutor())

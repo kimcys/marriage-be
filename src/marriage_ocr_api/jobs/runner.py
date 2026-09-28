@@ -127,6 +127,9 @@ class SubprocessOCRRunner:
             return self.settings.ocr_config_path_typed
         return self.settings.ocr_config_path_handwritten
 
+    def config_path_for(self, document_type: DocumentType) -> Path:
+        return self._config_path_for(document_type)
+
     def _build_command(self, request: OCRRunRequest) -> list[str]:
         cli_command = _CLI_COMMAND_BY_DOCUMENT_TYPE[request.document_type]
         config_path = self._config_path_for(request.document_type)

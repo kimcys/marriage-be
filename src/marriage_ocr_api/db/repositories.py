@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import ColumnElement, Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.batches.status import DocumentType
@@ -176,6 +176,9 @@ def mark_pending_for_retry(session: Session, job_id: UUID) -> OCRJob:
     job.error_message = None
     job.started_at = None
     job.completed_at = None
+    job.gemini_batch_stage = None
+    job.gemini_batch_name = None
+    job.gemini_batch_updated_at = None
     job.updated_at = utcnow()
     session.flush()
     return job
@@ -228,6 +231,16 @@ def cancel_pending_and_processing_jobs_for_batch(
     return jobs
 
 
+# A PROCESSING job in one of these Gemini Batch Mode stages isn't running in
+# any process -- it's waiting on Google (see jobs/gemini_batch.py, which
+# handles its own timeouts), so restart/stale recovery must leave it alone.
+BATCH_WAITING_STAGES = ("PREPARED", "SUBMITTING", "SUBMITTED", "FINISHING")
+
+
+def _not_waiting_on_gemini_batch() -> ColumnElement[bool]:
+    return or_(OCRJob.gemini_batch_stage.is_(None), OCRJob.gemini_batch_stage.not_in(BATCH_WAITING_STAGES))
+
+
 def fail_interrupted_jobs(session: Session, completed_at: datetime) -> list[OCRJob]:
     """Unconditionally fail every PROCESSING job. Only safe to call once, at
     application startup -- at that moment nothing can legitimately still be
@@ -235,7 +248,11 @@ def fail_interrupted_jobs(session: Session, completed_at: datetime) -> list[OCRJ
     Returns the affected jobs so the caller can recompute their
     document/batch status.
     """
-    jobs = list(session.scalars(select(OCRJob).where(OCRJob.status == JobStatus.PROCESSING.value)))
+    jobs = list(
+        session.scalars(
+            select(OCRJob).where(OCRJob.status == JobStatus.PROCESSING.value, _not_waiting_on_gemini_batch())
+        )
+    )
     for job in jobs:
         job.status = JobStatus.FAILED.value
         job.error_code = "PROCESS_INTERRUPTED"
@@ -269,6 +286,7 @@ def fail_stale_processing_jobs(session: Session, now: datetime, stale_after_seco
                 OCRJob.status == JobStatus.PROCESSING.value,
                 OCRJob.started_at.is_not(None),
                 OCRJob.started_at < cutoff,
+                _not_waiting_on_gemini_batch(),
             )
         )
     )
