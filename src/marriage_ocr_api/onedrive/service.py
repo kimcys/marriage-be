@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import logging
 import re
 import shutil
 import threading
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -434,12 +436,14 @@ def _sha256_of(path: Path) -> str:
 _ALREADY_INGESTED = "already-ingested"
 
 
-def _duplicate_of(session: Session, file_path: Path, seen: dict[str, str], submission_id: UUID) -> str | None:
+def _duplicate_of(
+    session: Session, file_path: Path, seen: dict[str, str], submission_id: UUID, digest: str | None = None
+) -> str | None:
     """What `file_path` duplicates -- an existing document's id, or the name
     of a file earlier in this same run -- _ALREADY_INGESTED if this same
     submission already ingested it, or None if its bytes are new. Records
     the file's hash in `seen` either way."""
-    digest = _sha256_of(file_path)
+    digest = digest or _sha256_of(file_path)
     existing = find_document_by_sha256(session, digest)
     if existing is not None:
         document_id, owner_submission_id = existing
@@ -456,11 +460,60 @@ def _record_duplicate(skipped_files: list[dict[str, str]], file_path: Path, dupl
     skipped_files.append({"filename": file_path.name, "status": _DUPLICATE, "duplicate_of": duplicate_of})
 
 
+def _submission_work_dir(settings: Settings, submission_id: UUID) -> Path:
+    return settings.storage_root.resolve() / "onedrive" / str(submission_id)
+
+
+class _ClassifyCache:
+    """Each file's classification, saved (by SHA-256) the moment it's made,
+    plus a typed PDF's page-1 Vision result -- so a run interrupted during
+    the classify phase (e.g. a worker deploy) doesn't pay Vision again for
+    files it already classified when it resumes. On the worker's own
+    volume; removed once the submission completes."""
+
+    def __init__(self, directory: Path) -> None:
+        self._dir = directory
+
+    def get(self, digest: str) -> tuple[Classification, Path | None] | None:
+        path = self._dir / f"{digest}.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            classification = Classification(**payload)
+        except (OSError, ValueError, TypeError):
+            return None
+        page_ocr = self._dir / f"{digest}.page1-ocr.json"
+        return classification, page_ocr if page_ocr.is_file() else None
+
+    def put(self, digest: str, classification: Classification, page_ocr: Path | None) -> None:
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            if page_ocr is not None and page_ocr.is_file():
+                shutil.copyfile(page_ocr, self._dir / f"{digest}.page1-ocr.json")
+            tmp = self._dir / f"{digest}.json.part"
+            tmp.write_text(json.dumps(asdict(classification)), encoding="utf-8")
+            tmp.replace(self._dir / f"{digest}.json")
+        except OSError:
+            logger.warning("could not cache classification %s", digest, exc_info=True)
+
+
+def _append_ingested(ledger: Path, relative_path: str) -> None:
+    """Record a file (path relative to the share root) as ingested, so a
+    resumed run tells the downloader to skip it (`--skip-list`)."""
+    try:
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        with ledger.open("a", encoding="utf-8") as handle:
+            handle.write(relative_path + "\n")
+    except OSError:
+        logger.warning("could not record %s as ingested", relative_path, exc_info=True)
+
+
 def _classify_files(
     runner: OneDriveFetchRunner,
     files: list[Path],
     page_ocr_by_file: dict[Path, Path],
     stack_size: int,
+    cache: _ClassifyCache | None = None,
+    digests: dict[Path, str] | None = None,
 ) -> dict[Path, Classification | ClassifyError]:
     """Classify every file, stacking consecutive single-image files up to
     `stack_size` per Vision call (marriage-ocr `classify-stack`) -- PDFs are
@@ -469,19 +522,41 @@ def _classify_files(
     retried file by file, so stacking can only ever save calls, not lose a
     classification."""
     results: dict[Path, Classification | ClassifyError] = {}
+    digests = digests or {}
+
+    def remember(file_path: Path, classification: Classification) -> None:
+        results[file_path] = classification
+        if cache is not None and file_path in digests:
+            cache.put(digests[file_path], classification, page_ocr_by_file.get(file_path))
 
     def classify_one(file_path: Path) -> None:
         try:
-            results[file_path] = runner.classify(file_path, page_ocr_output=page_ocr_by_file.get(file_path))
+            remember(file_path, runner.classify(file_path, page_ocr_output=page_ocr_by_file.get(file_path)))
         except ClassifyError as exc:
             results[file_path] = exc
+
+    pending: list[Path] = []
+    for file_path in files:
+        hit = cache.get(digests[file_path]) if cache is not None and file_path in digests else None
+        if hit is None:
+            pending.append(file_path)
+            continue
+        classification, cached_page_ocr = hit
+        results[file_path] = classification
+        staging = page_ocr_by_file.get(file_path)
+        if cached_page_ocr is not None and staging is not None:
+            staging.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(cached_page_ocr, staging)
+    if len(pending) < len(files):
+        logger.info("reusing %d cached classification(s)", len(files) - len(pending))
 
     def flush(stack: list[Path]) -> None:
         if len(stack) == 1:
             classify_one(stack[0])
         elif stack:
             try:
-                results.update(zip(stack, runner.classify_stack(stack), strict=True))
+                for file_path, classification in zip(stack, runner.classify_stack(stack), strict=True):
+                    remember(file_path, classification)
             except ClassifyError as exc:
                 logger.warning(
                     "stacked classify of %d file(s) failed, classifying one by one: %s",
@@ -493,7 +568,7 @@ def _classify_files(
         stack.clear()
 
     stack: list[Path] = []
-    for file_path in files:
+    for file_path in pending:
         if stack_size <= 1 or file_path.suffix.lower() == ".pdf":
             classify_one(file_path)
             continue
@@ -598,9 +673,13 @@ def run_onedrive_fetch(
             session.commit()
         heartbeat = _Heartbeat(session_factory, submission_id).start()
 
-        dest_dir = settings.storage_root.resolve() / "onedrive" / str(submission_id) / "downloaded"
+        work_dir = _submission_work_dir(settings, submission_id)
+        dest_dir = work_dir / "downloaded"
+        ingested_ledger = work_dir / "ingested.txt"
         try:
-            runner.fetch_public(url, dest_dir)
+            # A resumed run (see recover_stale_submissions) skips what its
+            # interrupted predecessor already ingested.
+            runner.fetch_public(url, dest_dir, skip_list=ingested_ledger if ingested_ledger.is_file() else None)
         except OneDriveFetchError as exc:
             message = _summarize_error_text(exc.stderr.strip() or str(exc), _ERROR_MESSAGE_LIMIT)
             _mark_submission_failed_safe(session_factory, submission_id, "ONEDRIVE_FETCH_FAILED", message)
@@ -617,8 +696,10 @@ def run_onedrive_fetch(
             page_ocr_by_file: dict[Path, Path] = {}
             seen_hashes: dict[str, str] = {}
             to_classify: list[Path] = []
+            digests: dict[Path, str] = {}
             for index, file_path in enumerate(files):
-                duplicate_of = _duplicate_of(session, file_path, seen_hashes, submission_id)
+                digests[file_path] = _sha256_of(file_path)
+                duplicate_of = _duplicate_of(session, file_path, seen_hashes, submission_id, digests[file_path])
                 if duplicate_of == _ALREADY_INGESTED:
                     continue
                 if duplicate_of is not None:
@@ -627,7 +708,14 @@ def run_onedrive_fetch(
                 page_ocr_by_file[file_path] = _page_ocr_staging_path(settings, submission_id, index)
                 to_classify.append(file_path)
 
-            results = _classify_files(runner, to_classify, page_ocr_by_file, settings.onedrive_classify_stack_size)
+            results = _classify_files(
+                runner,
+                to_classify,
+                page_ocr_by_file,
+                settings.onedrive_classify_stack_size,
+                cache=_ClassifyCache(work_dir / "classify-cache"),
+                digests=digests,
+            )
             for file_path in to_classify:
                 result = results[file_path]
                 if isinstance(result, ClassifyError):
@@ -660,6 +748,7 @@ def run_onedrive_fetch(
                         document_type=document_type,
                         page1_ocr_source=page_ocr_by_file.get(file_path),
                     )
+                    _append_ingested(ingested_ledger, file_path.relative_to(dest_dir).as_posix())
                 except UploadValidationError as exc:
                     _record_skipped_file(settings, submission_id, skipped_files, file_path, exc.code)
                 except Exception:
@@ -671,6 +760,8 @@ def run_onedrive_fetch(
             session.commit()
         shutil.rmtree(dest_dir, ignore_errors=True)
         shutil.rmtree(_page_ocr_staging_path(settings, submission_id, 0).parent, ignore_errors=True)
+        shutil.rmtree(work_dir / "classify-cache", ignore_errors=True)
+        ingested_ledger.unlink(missing_ok=True)
         logger.info("completed onedrive submission %s (%d skipped)", submission_id, len(skipped_files))
     except Exception:
         logger.exception("unexpected error processing onedrive submission %s", submission_id)

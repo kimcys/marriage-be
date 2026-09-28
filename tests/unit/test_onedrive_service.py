@@ -72,13 +72,16 @@ class FakeFetchRunner:
         self._classifications = classifications
         self.fetch_calls: list[tuple[str, Path]] = []
         self.only_calls: list[list[str] | None] = []
+        self.skip_lists: list[list[str] | None] = []
 
-    def fetch_public(self, url: str, dest: Path, only: list[str] | None = None) -> None:
+    def fetch_public(self, url: str, dest: Path, only: list[str] | None = None, skip_list: Path | None = None) -> None:
         self.fetch_calls.append((url, dest))
         self.only_calls.append(only)
+        self.skip_lists.append(skip_list.read_text().splitlines() if skip_list is not None else None)
+        skip = set(self.skip_lists[-1] or [])
         dest.mkdir(parents=True, exist_ok=True)
         for filename, content in self._files.items():
-            if only is None or filename in only:
+            if (only is None or filename in only) and filename not in skip:
                 (dest / filename).write_bytes(content)
 
     def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
@@ -89,7 +92,7 @@ class FakeFetchRunner:
 
 
 class FailingFetchRunner:
-    def fetch_public(self, url: str, dest: Path) -> None:
+    def fetch_public(self, url: str, dest: Path, skip_list: Path | None = None) -> None:
         raise OneDriveFetchError("sign-in required", stderr="requires interactive sign-in")
 
     def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
@@ -413,7 +416,7 @@ def test_run_onedrive_fetch_summarizes_a_long_rich_traceback_stderr(tmp_path: Pa
     )
 
     class LongTracebackFetchRunner:
-        def fetch_public(self, url: str, dest: Path) -> None:
+        def fetch_public(self, url: str, dest: Path, skip_list: Path | None = None) -> None:
             raise OneDriveFetchError("onedrive fetch-public exited with code 1", stderr=box_traceback)
 
         def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
@@ -1457,3 +1460,113 @@ def test_heartbeat_keeps_a_live_run_fresh() -> None:
         updated_at = updated_at.replace(tzinfo=UTC)
     assert datetime.now(UTC) - updated_at < timedelta(seconds=5)
     session.close()
+
+
+class WorkerKilled(BaseException):
+    """Stands in for the worker process dying mid-run (a deploy): not an
+    Exception, so run_onedrive_fetch's own error handling never sees it."""
+
+
+class KillableRunner(FakeFetchRunner):
+    def __init__(self, *args, kill_on_classify: str | None = None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.kill_on_classify = kill_on_classify
+        self.classified: list[str] = []
+
+    def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
+        if file_path.name == self.kill_on_classify:
+            raise WorkerKilled()
+        self.classified.append(file_path.name)
+        return super().classify(file_path, page_ocr_output)
+
+
+def _resume_setup(tmp_path: Path):
+    session_factory = sessionmaker(bind=_engine(), expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!killed")
+    session.commit()
+    session.close()
+    files = {name: _FAKE_PDF_BYTES for name in ("a.pdf", "b.pdf", "c.pdf")}
+    return session_factory, Settings(storage_root=tmp_path, onedrive_classify_stack_size=1), batch, submission, files
+
+
+def test_a_run_killed_during_classify_does_not_pay_again_for_files_it_classified(tmp_path: Path) -> None:
+    session_factory, settings, batch, submission, files = _resume_setup(tmp_path)
+    classifications = {name: _classification() for name in files}
+
+    first = KillableRunner(files=files, classifications=classifications, kill_on_classify="c.pdf")
+    with pytest.raises(WorkerKilled):
+        run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), first)
+    assert first.classified == ["a.pdf", "b.pdf"]
+
+    resumed = KillableRunner(files=files, classifications=classifications)
+    run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), resumed)
+
+    assert resumed.classified == ["c.pdf"]  # a.pdf and b.pdf came from the cache
+    session = session_factory()
+    assert len(list_documents(session, batch.id, limit=10, offset=0)) == 3
+    assert get_submission(session, submission.id).status == OneDriveSubmissionStatus.FETCHED.value
+    session.close()
+    # Everything is cleaned up once the submission completes.
+    work_dir = tmp_path / "onedrive" / str(submission.id)
+    assert not (work_dir / "classify-cache").exists() and not (work_dir / "ingested.txt").exists()
+
+
+def test_a_run_killed_during_ingest_does_not_download_or_classify_finished_files_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import marriage_ocr_api.onedrive.service as onedrive_service
+
+    session_factory, settings, batch, submission, files = _resume_setup(tmp_path)
+    classifications = {name: _classification() for name in files}
+    real_save = onedrive_service.save_local_file
+
+    def die_on_b(source_path, *args, **kwargs):
+        if source_path.name == "b.pdf":
+            raise WorkerKilled()
+        return real_save(source_path, *args, **kwargs)
+
+    monkeypatch.setattr(onedrive_service, "save_local_file", die_on_b)
+    first = KillableRunner(files=files, classifications=classifications)
+    with pytest.raises(WorkerKilled):
+        run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), first)
+    monkeypatch.setattr(onedrive_service, "save_local_file", real_save)
+
+    resumed = KillableRunner(files=files, classifications=classifications)
+    job_executor = FakeJobExecutor()
+    run_onedrive_fetch(submission.id, settings, session_factory, job_executor, resumed)
+
+    assert resumed.skip_lists == [["a.pdf"]]  # the downloader was told to skip what's done
+    assert resumed.classified == []  # b.pdf and c.pdf were classified before the kill
+    assert len(job_executor.submitted) == 2  # b.pdf and c.pdf
+    session = session_factory()
+    assert len(list_documents(session, batch.id, limit=10, offset=0)) == 3
+    session.close()
+
+
+def test_classify_cache_restores_a_typed_pdfs_page1_ocr(tmp_path: Path) -> None:
+    from marriage_ocr_api.onedrive.service import _classify_files, _ClassifyCache
+
+    pdf = tmp_path / "typed.pdf"
+    pdf.write_bytes(_FAKE_PDF_BYTES)
+    first_staging = tmp_path / "run1" / "0.json"
+    cache = _ClassifyCache(tmp_path / "cache")
+
+    class SavesPage1(FakeFetchRunner):
+        calls = 0
+
+        def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
+            SavesPage1.calls += 1
+            page_ocr_output.parent.mkdir(parents=True, exist_ok=True)
+            page_ocr_output.write_text('{"version": 1}')
+            return _TYPED_NIKAH_MODERN
+
+    runner = SavesPage1(files={}, classifications={})
+    _classify_files(runner, [pdf], {pdf: first_staging}, 3, cache=cache, digests={pdf: "abc"})
+    second_staging = tmp_path / "run2" / "7.json"
+    results = _classify_files(runner, [pdf], {pdf: second_staging}, 3, cache=cache, digests={pdf: "abc"})
+
+    assert SavesPage1.calls == 1
+    assert results[pdf] == _TYPED_NIKAH_MODERN
+    assert second_staging.read_text() == '{"version": 1}'

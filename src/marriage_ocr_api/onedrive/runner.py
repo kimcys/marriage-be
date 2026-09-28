@@ -83,7 +83,7 @@ class OneDriveFetchRunner:
             check=False,
         )
 
-    def fetch_public(self, url: str, dest: Path, only: list[str] | None = None) -> None:
+    def fetch_public(self, url: str, dest: Path, only: list[str] | None = None, skip_list: Path | None = None) -> None:
         """`only` limits the download to those file names (see marriage-ocr's
         `onedrive fetch-public --only`) -- used to re-fetch just the files a
         previous run lost instead of the whole share."""
@@ -91,6 +91,8 @@ class OneDriveFetchRunner:
         args = ["onedrive", "fetch-public", "--url", url, "--dest", str(dest)]
         for name in only or []:
             args.extend(["--only", name])
+        if skip_list is not None:
+            args.extend(["--skip-list", str(skip_list)])
         result = self._run(args)
         if result.returncode != 0:
             raise OneDriveFetchError(

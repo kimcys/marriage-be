@@ -59,7 +59,7 @@ class _FakeFetchRunner:
         self._filename = filename
         self._classification = classification
 
-    def fetch_public(self, url: str, dest: Path) -> None:
+    def fetch_public(self, url: str, dest: Path, skip_list: Path | None = None) -> None:
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self._source_pdf, dest / self._filename)
 
