@@ -1374,7 +1374,8 @@ def test_an_interrupted_fetch_is_resumed_not_failed() -> None:
 
     assert executor.submitted == [interrupted]
     resumed = get_submission(session, interrupted)
-    assert resumed.status == OneDriveSubmissionStatus.FETCHING.value
+    # PENDING until its re-queued task actually starts (and claims it).
+    assert resumed.status == OneDriveSubmissionStatus.PENDING.value
     assert resumed.fetch_attempts == 1
     assert get_submission(session, alive).fetch_attempts == 0
     session.close()
@@ -1424,6 +1425,7 @@ def test_a_resumed_fetch_skips_files_it_already_ingested(tmp_path: Path) -> None
             CountingRunner.classified.append(file_path.name)
             return super().classify(file_path, page_ocr_output)
 
+    _recovery_requeues(session_factory, submission.id)
     job_executor = FakeJobExecutor()
     run_onedrive_fetch(
         submission.id,
@@ -1460,6 +1462,23 @@ def test_heartbeat_keeps_a_live_run_fresh() -> None:
         updated_at = updated_at.replace(tzinfo=UTC)
     assert datetime.now(UTC) - updated_at < timedelta(seconds=5)
     session.close()
+
+
+def _recovery_requeues(session_factory, submission_id) -> None:
+    """What recover_stale_submissions does to an interrupted run before its
+    resumed task starts: back to PENDING (see
+    resume_or_fail_stale_fetching_submissions)."""
+    from sqlalchemy import update
+
+    from marriage_ocr_api.onedrive.models import OneDriveSubmission
+
+    with session_factory() as session:
+        session.execute(
+            update(OneDriveSubmission)
+            .where(OneDriveSubmission.id == submission_id)
+            .values(status=OneDriveSubmissionStatus.PENDING.value)
+        )
+        session.commit()
 
 
 class WorkerKilled(BaseException):
@@ -1500,6 +1519,7 @@ def test_a_run_killed_during_classify_does_not_pay_again_for_files_it_classified
         run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), first)
     assert first.classified == ["a.pdf", "b.pdf"]
 
+    _recovery_requeues(session_factory, submission.id)
     resumed = KillableRunner(files=files, classifications=classifications)
     run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), resumed)
 
@@ -1533,6 +1553,7 @@ def test_a_run_killed_during_ingest_does_not_download_or_classify_finished_files
         run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), first)
     monkeypatch.setattr(onedrive_service, "save_local_file", real_save)
 
+    _recovery_requeues(session_factory, submission.id)
     resumed = KillableRunner(files=files, classifications=classifications)
     job_executor = FakeJobExecutor()
     run_onedrive_fetch(submission.id, settings, session_factory, job_executor, resumed)
@@ -1570,3 +1591,60 @@ def test_classify_cache_restores_a_typed_pdfs_page1_ocr(tmp_path: Path) -> None:
     assert SavesPage1.calls == 1
     assert results[pdf] == _TYPED_NIKAH_MODERN
     assert second_staging.read_text() == '{"version": 1}'
+
+
+def test_a_duplicate_task_never_runs_a_link_twice(tmp_path: Path) -> None:
+    session_factory, settings, batch, submission, files = _resume_setup(tmp_path)
+    classifications = {name: _classification() for name in files}
+    run_onedrive_fetch(
+        submission.id,
+        settings,
+        session_factory,
+        FakeJobExecutor(),
+        KillableRunner(files=files, classifications=classifications),
+    )
+
+    # A stray duplicate task for the finished link, and one arriving while a
+    # (simulated) live run holds it with a fresh heartbeat.
+    stray = KillableRunner(files=files, classifications=classifications)
+    run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), stray)
+    session = session_factory()
+    mark_fetching(session, submission.id)
+    session.commit()
+    session.close()
+    racing = KillableRunner(files=files, classifications=classifications)
+    run_onedrive_fetch(submission.id, settings, session_factory, FakeJobExecutor(), racing)
+
+    assert stray.fetch_calls == [] and racing.fetch_calls == []
+    session = session_factory()
+    assert len(list_documents(session, batch.id, limit=10, offset=0)) == 3
+    session.close()
+
+
+def test_a_lost_pending_fetch_is_requeued() -> None:
+    from sqlalchemy import update
+
+    from marriage_ocr_api.onedrive.models import OneDriveSubmission
+
+    session_factory = sessionmaker(bind=_engine(), expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    lost = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!lost")
+    recent = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!recent")
+    session.commit()
+    session.execute(
+        update(OneDriveSubmission)
+        .where(OneDriveSubmission.id == lost.id)
+        .values(updated_at=datetime.now(UTC) - timedelta(hours=4))
+    )
+    session.commit()
+    executor = FakeOneDriveExecutor()
+
+    recover_stale_submissions(session, 22_500, executor)
+    session.commit()
+    recover_stale_submissions(session, 22_500, executor)  # the next tick doesn't re-queue it again
+    session.commit()
+
+    assert executor.submitted == [lost.id]
+    assert recent.id not in executor.submitted
+    session.close()

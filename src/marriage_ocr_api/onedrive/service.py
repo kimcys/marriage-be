@@ -121,6 +121,9 @@ class SessionFactory(Protocol):
 HEARTBEAT_INTERVAL_SECONDS = 60.0
 STALE_HEARTBEAT_SECONDS = 600.0
 MAX_FETCH_RESUMES = 3
+# A PENDING submission whose fetch task hasn't started in this long is
+# re-queued (its task may have been lost with a restarted worker).
+LOST_PENDING_AFTER_SECONDS = 3 * 3600.0
 
 
 def _utcnow() -> datetime:
@@ -669,7 +672,12 @@ def run_onedrive_fetch(
                 return
             batch_id = submission.batch_id
             url = submission.url
-            repositories.mark_fetching(session, submission_id)
+            if not repositories.claim_for_fetch(session, submission_id, _utcnow(), STALE_HEARTBEAT_SECONDS):
+                # Another run holds it (fresh heartbeat), or it's already
+                # done -- this is a duplicate task (see claim_for_fetch).
+                session.rollback()
+                logger.info("skipping onedrive submission %s: already fetching or finished", submission_id)
+                return
             session.commit()
         heartbeat = _Heartbeat(session_factory, submission_id).start()
 
@@ -794,15 +802,20 @@ def recover_stale_submissions(
     resume, failed = repositories.resume_or_fail_stale_fetching_submissions(
         session, _utcnow(), STALE_HEARTBEAT_SECONDS, MAX_FETCH_RESUMES if executor is not None else 0
     )
+    lost = (
+        repositories.requeue_lost_pending_submissions(session, _utcnow(), LOST_PENDING_AFTER_SECONDS)
+        if executor is not None
+        else []
+    )
     session.commit()
-    for submission_id in resume:
+    for submission_id in [*resume, *lost]:
         assert executor is not None
         try:
             executor.submit(submission_id)
-            logger.warning("resuming interrupted onedrive submission %s", submission_id)
+            logger.warning("resuming onedrive submission %s", submission_id)
         except Exception:
             logger.exception("could not resume onedrive submission %s", submission_id)
-    return len(resume) + len(failed) + _fail_stale_refetches(session, stale_after_seconds)
+    return len(resume) + len(lost) + len(failed) + _fail_stale_refetches(session, stale_after_seconds)
 
 
 def _fail_stale_refetches(session: Session, stale_after_seconds: float) -> int:

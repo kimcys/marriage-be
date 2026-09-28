@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import Select, delete, func, select
+from sqlalchemy import Select, and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from marriage_ocr_api.batches.models import Document
@@ -219,6 +219,11 @@ def resume_or_fail_stale_fetching_submissions(
     for submission in stale:
         if submission.fetch_attempts < max_attempts:
             submission.fetch_attempts += 1
+            # PENDING, not FETCHING, until the resumed run actually starts
+            # (claim_for_fetch): its task may wait in the queue behind other
+            # long fetches, with no heartbeat, and must not look interrupted
+            # again meanwhile.
+            submission.status = OneDriveSubmissionStatus.PENDING.value
             submission.updated_at = now
             resume.append(submission.id)
         else:
@@ -232,6 +237,52 @@ def resume_or_fail_stale_fetching_submissions(
             failed.append(submission)
     session.flush()
     return resume, failed
+
+
+def claim_for_fetch(session: Session, submission_id: UUID, now: datetime, stale_after_seconds: float) -> bool:
+    """Atomically move a submission to FETCHING for the run that's starting.
+    Only a PENDING submission, or a FETCHING one whose run stopped
+    heartbeating, can be claimed -- so a duplicate task (a re-queued resume,
+    a broker redelivery) exits instead of running the same link twice, and a
+    finished submission is never re-fetched by a stray task."""
+    cutoff = now - timedelta(seconds=stale_after_seconds)
+    result = session.execute(
+        update(OneDriveSubmission)
+        .where(
+            OneDriveSubmission.id == submission_id,
+            or_(
+                OneDriveSubmission.status == OneDriveSubmissionStatus.PENDING.value,
+                and_(
+                    OneDriveSubmission.status == OneDriveSubmissionStatus.FETCHING.value,
+                    OneDriveSubmission.updated_at < cutoff,
+                ),
+            ),
+        )
+        .values(status=OneDriveSubmissionStatus.FETCHING.value, updated_at=now)
+    )
+    session.flush()
+    return bool(getattr(result, "rowcount", 0))
+
+
+def requeue_lost_pending_submissions(session: Session, now: datetime, pending_after_seconds: float) -> list[UUID]:
+    """PENDING submissions whose task never started -- e.g. a worker that had
+    already received it was restarted. Re-queuing one whose task is merely
+    waiting is harmless: whichever copy starts first claims it
+    (claim_for_fetch) and the other exits. updated_at is bumped so each is
+    re-queued at most once per `pending_after_seconds`."""
+    cutoff = now - timedelta(seconds=pending_after_seconds)
+    submissions = list(
+        session.scalars(
+            select(OneDriveSubmission).where(
+                OneDriveSubmission.status == OneDriveSubmissionStatus.PENDING.value,
+                OneDriveSubmission.updated_at < cutoff,
+            )
+        )
+    )
+    for submission in submissions:
+        submission.updated_at = now
+    session.flush()
+    return [submission.id for submission in submissions]
 
 
 def fail_stale_fetching_submissions(

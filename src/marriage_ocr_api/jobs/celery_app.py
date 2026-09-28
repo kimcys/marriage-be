@@ -21,6 +21,11 @@ celery_app.conf.task_track_started = True
 # recover_stale_jobs beat task below (redelivery alone doesn't reset a job
 # already marked PROCESSING in the DB).
 celery_app.conf.task_acks_late = True
+# One task per worker process at a time, not Celery's default of reserving 4
+# ahead: a reserved OneDrive fetch (acknowledged on receipt, see
+# onedrive/tasks.py) would be lost with a restarted worker, and short OCR
+# jobs shouldn't sit reserved behind a process busy with a 25-minute fetch.
+celery_app.conf.worker_prefetch_multiplier = 1
 celery_app.conf.task_reject_on_worker_lost = True
 # Hard-kill a task that runs well past the OCR subprocess's own timeout,
 # rather than letting a wedged worker process hold a slot forever.
