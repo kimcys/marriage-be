@@ -5,12 +5,14 @@ import hashlib
 import logging
 import re
 import shutil
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -19,7 +21,7 @@ from marriage_ocr_api.batches.document_ingest import create_document_page_jobs, 
 from marriage_ocr_api.batches.models import Document
 from marriage_ocr_api.batches.repositories import (
     create_document,
-    find_document_id_by_sha256,
+    find_document_by_sha256,
     recompute_batch_status,
     recompute_document_status,
 )
@@ -109,6 +111,14 @@ _RECLASSIFIABLE_STATUSES = frozenset({"CLASSIFY_FAILED", "NEEDS_MANUAL_CLASSIFIC
 
 class SessionFactory(Protocol):
     def __call__(self) -> Session: ...
+
+
+# A live fetch/reclassify run heartbeats this often (see _Heartbeat); one
+# silent for STALE_HEARTBEAT_SECONDS is treated as interrupted and resumed,
+# up to MAX_FETCH_RESUMES times before being marked FAILED.
+HEARTBEAT_INTERVAL_SECONDS = 60.0
+STALE_HEARTBEAT_SECONDS = 600.0
+MAX_FETCH_RESUMES = 3
 
 
 def _utcnow() -> datetime:
@@ -364,6 +374,51 @@ def _record_skipped_file(
     skipped_files.append(entry)
 
 
+class _Heartbeat:
+    """Bumps a FETCHING submission's updated_at every `interval` seconds
+    while its run is alive -- including through the long fetch-public
+    download, which gives no progress of its own. A submission whose
+    heartbeat stops (the worker was restarted, e.g. by a deploy) is resumed
+    by recover_stale_submissions rather than left stuck or failed."""
+
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session] | SessionFactory,
+        submission_id: UUID,
+        interval: float = HEARTBEAT_INTERVAL_SECONDS,
+    ) -> None:
+        self._session_factory = session_factory
+        self._submission_id = submission_id
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=f"onedrive-heartbeat-{submission_id}", daemon=True)
+
+    def start(self) -> _Heartbeat:
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                with self._session_factory() as session:
+                    session.execute(
+                        sa_update(OneDriveSubmission)
+                        .where(
+                            OneDriveSubmission.id == self._submission_id,
+                            OneDriveSubmission.status == OneDriveSubmissionStatus.FETCHING.value,
+                        )
+                        .values(updated_at=_utcnow())
+                    )
+                    session.commit()
+            except Exception:
+                logger.warning("heartbeat failed for onedrive submission %s", self._submission_id, exc_info=True)
+
+
 def _sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -372,14 +427,25 @@ def _sha256_of(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _duplicate_of(session: Session, file_path: Path, seen: dict[str, str]) -> str | None:
+# _duplicate_of's answer for a file this same submission already ingested --
+# i.e. a resumed run (see resume_or_fail_stale_fetching_submissions) meeting
+# the files its interrupted predecessor got through. Skipped silently: it's
+# not a duplicate, just already done.
+_ALREADY_INGESTED = "already-ingested"
+
+
+def _duplicate_of(session: Session, file_path: Path, seen: dict[str, str], submission_id: UUID) -> str | None:
     """What `file_path` duplicates -- an existing document's id, or the name
-    of a file earlier in this same run -- or None if its bytes are new.
-    Records the file's hash in `seen` either way."""
+    of a file earlier in this same run -- _ALREADY_INGESTED if this same
+    submission already ingested it, or None if its bytes are new. Records
+    the file's hash in `seen` either way."""
     digest = _sha256_of(file_path)
-    existing = find_document_id_by_sha256(session, digest)
+    existing = find_document_by_sha256(session, digest)
     if existing is not None:
-        return f"document:{existing}"
+        document_id, owner_submission_id = existing
+        if owner_submission_id == submission_id:
+            return _ALREADY_INGESTED
+        return f"document:{document_id}"
     if digest in seen:
         return f"file:{seen[digest]}"
     seen[digest] = file_path.name
@@ -519,6 +585,7 @@ def run_onedrive_fetch(
     by the in-process executor and the Celery worker task.
     """
     runner = runner or OneDriveFetchRunner(settings)
+    heartbeat: _Heartbeat | None = None
     try:
         with session_factory() as session:
             submission = repositories.get_submission(session, submission_id)
@@ -529,6 +596,7 @@ def run_onedrive_fetch(
             url = submission.url
             repositories.mark_fetching(session, submission_id)
             session.commit()
+        heartbeat = _Heartbeat(session_factory, submission_id).start()
 
         dest_dir = settings.storage_root.resolve() / "onedrive" / str(submission_id) / "downloaded"
         try:
@@ -550,7 +618,9 @@ def run_onedrive_fetch(
             seen_hashes: dict[str, str] = {}
             to_classify: list[Path] = []
             for index, file_path in enumerate(files):
-                duplicate_of = _duplicate_of(session, file_path, seen_hashes)
+                duplicate_of = _duplicate_of(session, file_path, seen_hashes, submission_id)
+                if duplicate_of == _ALREADY_INGESTED:
+                    continue
                 if duplicate_of is not None:
                     _record_duplicate(skipped_files, file_path, duplicate_of)
                     continue
@@ -610,16 +680,38 @@ def run_onedrive_fetch(
             "INTERNAL_PROCESSING_ERROR",
             "The OneDrive submission encountered an internal processing error.",
         )
+    finally:
+        if heartbeat is not None:
+            heartbeat.stop()
 
 
-def recover_stale_submissions(session: Session, stale_after_seconds: float) -> int:
-    """Periodic recovery for submissions abandoned by a crashed or killed
-    worker mid-run (fetch or classify) -- the OneDrive counterpart of
-    jobs/service.py::recover_stale_jobs. See
-    onedrive/repositories.py::fail_stale_fetching_submissions.
+def recover_stale_submissions(
+    session: Session,
+    stale_after_seconds: float,
+    executor: OneDriveExecutorProtocol | None = None,
+) -> int:
+    """Periodic recovery for submissions whose worker died mid-run (fetch or
+    classify) -- usually a deploy restarting the worker partway through a
+    long link. A run that stopped heartbeating is resumed through
+    `executor` (MAX_FETCH_RESUMES times; files it already ingested are
+    skipped), and only then FAILED. `stale_after_seconds` still bounds
+    stuck single-file re-downloads (_fail_stale_refetches).
+
+    The caller commits; resumed runs are submitted only after that, so the
+    new run never races the bookkeeping that queued it.
     """
-    failed = repositories.fail_stale_fetching_submissions(session, _utcnow(), stale_after_seconds)
-    return len(failed) + _fail_stale_refetches(session, stale_after_seconds)
+    resume, failed = repositories.resume_or_fail_stale_fetching_submissions(
+        session, _utcnow(), STALE_HEARTBEAT_SECONDS, MAX_FETCH_RESUMES if executor is not None else 0
+    )
+    session.commit()
+    for submission_id in resume:
+        assert executor is not None
+        try:
+            executor.submit(submission_id)
+            logger.warning("resuming interrupted onedrive submission %s", submission_id)
+        except Exception:
+            logger.exception("could not resume onedrive submission %s", submission_id)
+    return len(resume) + len(failed) + _fail_stale_refetches(session, stale_after_seconds)
 
 
 def _fail_stale_refetches(session: Session, stale_after_seconds: float) -> int:
@@ -990,6 +1082,7 @@ def run_skipped_files_reclassify(
     status; files whose bytes are gone, or whose classify still fails, are
     left untouched (a reviewer can still classify those by hand)."""
     runner = runner or OneDriveFetchRunner(settings)
+    heartbeat = _Heartbeat(session_factory, submission_id).start()
     try:
         with session_factory() as session:
             submission = repositories.get_submission(session, submission_id)
@@ -1017,7 +1110,11 @@ def run_skipped_files_reclassify(
             if source_path is None or not source_path.is_file():
                 continue
             with session_factory() as session:
-                duplicate_of = _duplicate_of(session, source_path, seen_hashes)
+                duplicate_of = _duplicate_of(session, source_path, seen_hashes, submission_id)
+                if duplicate_of == _ALREADY_INGESTED:
+                    repositories.remove_skipped_file(session, submission_id, filename)
+                    session.commit()
+                    continue
                 if duplicate_of is not None:
                     repositories.update_skipped_file(
                         session, submission_id, filename, {"status": _DUPLICATE, "duplicate_of": duplicate_of}
@@ -1094,6 +1191,8 @@ def run_skipped_files_reclassify(
     except Exception:
         logger.exception("unexpected error reclassifying skipped files for onedrive submission %s", submission_id)
         _restore_fetched_safe(session_factory, submission_id)
+    finally:
+        heartbeat.stop()
 
 
 def delete_submission(session: Session, settings: Settings, submission_id: UUID) -> None:

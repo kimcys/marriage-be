@@ -73,6 +73,7 @@ def mark_fetched(
     now = utcnow()
     submission.status = OneDriveSubmissionStatus.FETCHED.value
     submission.skipped_files = skipped_files or None
+    submission.fetch_attempts = 0
     submission.fetched_at = now
     submission.updated_at = now
     session.flush()
@@ -194,6 +195,43 @@ def delete_submission_row(session: Session, submission_id: UUID) -> None:
     session.execute(delete(OCRJob).where(OCRJob.document_id.in_(document_ids)))
     session.execute(delete(Document).where(Document.onedrive_submission_id == submission_id))
     session.execute(delete(OneDriveSubmission).where(OneDriveSubmission.id == submission_id))
+
+
+def resume_or_fail_stale_fetching_submissions(
+    session: Session, now: datetime, stale_after_seconds: float, max_attempts: int
+) -> tuple[list[UUID], list[OneDriveSubmission]]:
+    """FETCHING submissions whose run stopped heartbeating (see
+    onedrive/service.py::_heartbeat) -- almost always a worker restarted
+    mid-run by a deploy. Up to `max_attempts` times each is handed back to be
+    re-run (it stays FETCHING, so nothing changes for the user); after that
+    it's FAILED as before. Returns (ids to re-run, submissions failed)."""
+    cutoff = now - timedelta(seconds=stale_after_seconds)
+    stale = list(
+        session.scalars(
+            select(OneDriveSubmission).where(
+                OneDriveSubmission.status == OneDriveSubmissionStatus.FETCHING.value,
+                OneDriveSubmission.updated_at < cutoff,
+            )
+        )
+    )
+    resume: list[UUID] = []
+    failed: list[OneDriveSubmission] = []
+    for submission in stale:
+        if submission.fetch_attempts < max_attempts:
+            submission.fetch_attempts += 1
+            submission.updated_at = now
+            resume.append(submission.id)
+        else:
+            submission.status = OneDriveSubmissionStatus.FAILED.value
+            submission.error_code = "PROCESSING_INTERRUPTED"
+            submission.error_message = (
+                "Processing was interrupted repeatedly and did not complete. Retry this link to try again."
+            )
+            submission.fetched_at = now
+            submission.updated_at = now
+            failed.append(submission)
+    session.flush()
+    return resume, failed
 
 
 def fail_stale_fetching_submissions(

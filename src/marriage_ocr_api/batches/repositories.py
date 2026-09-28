@@ -200,9 +200,13 @@ def get_document(session: Session, document_id: UUID) -> Document | None:
     return session.get(Document, document_id)
 
 
-def find_document_id_by_sha256(session: Session, sha256: str) -> UUID | None:
-    """Any already-ingested document (in any batch) with these exact bytes."""
-    return session.scalar(select(Document.id).where(Document.sha256 == sha256).limit(1))
+def find_document_by_sha256(session: Session, sha256: str) -> tuple[UUID, UUID | None] | None:
+    """(id, onedrive_submission_id) of an already-ingested document (in any
+    batch) with these exact bytes, if there is one."""
+    row = session.execute(
+        select(Document.id, Document.onedrive_submission_id).where(Document.sha256 == sha256).limit(1)
+    ).first()
+    return (row.id, row.onedrive_submission_id) if row is not None else None
 
 
 def list_documents(session: Session, batch_id: UUID, limit: int, offset: int) -> list[Document]:

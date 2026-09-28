@@ -27,6 +27,10 @@ _settings = get_settings()
     # several-thousand-file link can legitimately run far longer.
     time_limit=_settings.onedrive_fetch_timeout_seconds + 60,
     soft_time_limit=_settings.onedrive_fetch_timeout_seconds + 30,
+    # Acknowledged on receipt, unlike the global task_acks_late: a fetch
+    # interrupted by a worker restart is resumed by recover_stale_submissions
+    # (heartbeat-based), and a broker redelivery on top would run it twice.
+    acks_late=False,
 )
 def fetch_onedrive_submission(submission_id: str) -> None:
     # Imported lazily (not at module level): jobs.celery_executor -> jobs.tasks
@@ -93,8 +97,10 @@ def recover_stale_submissions_task() -> int:
     # submission stale (and eligible for the operator to retry) while a
     # worker is still legitimately inside its allotted run.
     stale_after_seconds = settings.onedrive_fetch_timeout_seconds + 900
+    from marriage_ocr_api.onedrive.celery_executor import CeleryOneDriveExecutor
+
     with session_factory() as session:
-        recovered = recover_stale_submissions(session, stale_after_seconds)
+        recovered = recover_stale_submissions(session, stale_after_seconds, CeleryOneDriveExecutor())
         session.commit()
     if recovered:
         logger.warning("Recovered %s stale FETCHING onedrive submission(s) abandoned by a crashed worker", recovered)

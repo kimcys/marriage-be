@@ -1337,3 +1337,123 @@ def test_stack_size_one_turns_stacking_off(tmp_path: Path) -> None:
 
     assert runner.stack_calls == []
     assert sorted(runner.single_calls) == _IMAGES
+
+
+def _fetching_submission(session_factory, url: str, *, silent_for: timedelta, attempts: int = 0):
+    from sqlalchemy import update
+
+    from marriage_ocr_api.onedrive.models import OneDriveSubmission
+
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url=url)
+    mark_fetching(session, submission.id)
+    session.commit()
+    session.execute(
+        update(OneDriveSubmission)
+        .where(OneDriveSubmission.id == submission.id)
+        .values(updated_at=datetime.now(UTC) - silent_for, fetch_attempts=attempts)
+    )
+    session.commit()
+    session.close()
+    return submission.id
+
+
+def test_an_interrupted_fetch_is_resumed_not_failed() -> None:
+    session_factory = sessionmaker(bind=_engine(), expire_on_commit=False)
+    interrupted = _fetching_submission(session_factory, "https://1drv.ms/f/s!deploy", silent_for=timedelta(minutes=15))
+    alive = _fetching_submission(session_factory, "https://1drv.ms/f/s!alive", silent_for=timedelta(minutes=2))
+    executor = FakeOneDriveExecutor()
+
+    session = session_factory()
+    recover_stale_submissions(session, 22_500, executor)
+    session.commit()
+
+    assert executor.submitted == [interrupted]
+    resumed = get_submission(session, interrupted)
+    assert resumed.status == OneDriveSubmissionStatus.FETCHING.value
+    assert resumed.fetch_attempts == 1
+    assert get_submission(session, alive).fetch_attempts == 0
+    session.close()
+
+
+def test_a_fetch_interrupted_too_many_times_is_failed() -> None:
+    session_factory = sessionmaker(bind=_engine(), expire_on_commit=False)
+    submission_id = _fetching_submission(
+        session_factory, "https://1drv.ms/f/s!flaky", silent_for=timedelta(minutes=15), attempts=3
+    )
+    executor = FakeOneDriveExecutor()
+
+    session = session_factory()
+    recover_stale_submissions(session, 22_500, executor)
+    session.commit()
+
+    assert executor.submitted == []
+    failed = get_submission(session, submission_id)
+    assert (failed.status, failed.error_code) == (OneDriveSubmissionStatus.FAILED.value, "PROCESSING_INTERRUPTED")
+    session.close()
+
+
+def test_a_resumed_fetch_skips_files_it_already_ingested(tmp_path: Path) -> None:
+    session_factory = sessionmaker(bind=_engine(), expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!resume")
+    session.commit()
+    session.close()
+    settings = Settings(storage_root=tmp_path)
+    files = {"a.pdf": _FAKE_PDF_BYTES, "b.pdf": _FAKE_PDF_BYTES}
+    classifications = {name: _classification() for name in files}
+
+    # First (interrupted) run got through a.pdf only.
+    run_onedrive_fetch(
+        submission.id,
+        settings,
+        session_factory,
+        FakeJobExecutor(),
+        FakeFetchRunner(files={"a.pdf": files["a.pdf"]}, classifications=classifications),
+    )
+
+    class CountingRunner(FakeFetchRunner):
+        classified: list[str] = []
+
+        def classify(self, file_path: Path, page_ocr_output: Path | None = None) -> Classification:
+            CountingRunner.classified.append(file_path.name)
+            return super().classify(file_path, page_ocr_output)
+
+    job_executor = FakeJobExecutor()
+    run_onedrive_fetch(
+        submission.id,
+        settings,
+        session_factory,
+        job_executor,
+        CountingRunner(files=files, classifications=classifications),
+    )
+
+    session = session_factory()
+    updated = get_submission(session, submission.id)
+    assert CountingRunner.classified == ["b.pdf"]  # a.pdf not classified (or paid for) again
+    assert updated.skipped_files is None  # and not reported as a duplicate either
+    assert len(list_documents(session, batch.id, limit=10, offset=0)) == 2
+    assert len(job_executor.submitted) == 1
+    session.close()
+
+
+def test_heartbeat_keeps_a_live_run_fresh() -> None:
+    import time
+
+    from marriage_ocr_api.onedrive.service import _Heartbeat
+
+    session_factory = sessionmaker(bind=_engine(), expire_on_commit=False)
+    submission_id = _fetching_submission(session_factory, "https://1drv.ms/f/s!beat", silent_for=timedelta(hours=1))
+
+    heartbeat = _Heartbeat(session_factory, submission_id, interval=0.05).start()
+    time.sleep(0.3)
+    heartbeat.stop()
+
+    session = session_factory()
+    updated_at = get_submission(session, submission_id).updated_at
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
+    assert datetime.now(UTC) - updated_at < timedelta(seconds=5)
+    session.close()

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Uuid
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from marriage_ocr_api.db.base import Base
@@ -42,3 +42,7 @@ class OneDriveSubmission(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
     fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # How many times an interrupted fetch (worker restarted mid-run, e.g. a
+    # deploy) has been resumed automatically -- see onedrive/repositories.py::
+    # resume_or_fail_stale_fetching_submissions. Reset once it completes.
+    fetch_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
