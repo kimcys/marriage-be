@@ -138,6 +138,8 @@ class SubprocessOCRRunner:
             if request.page1_ocr_path is not None and cli_command == "process-typed"
             else []
         )
+        if cli_command == "process-typed" and self.settings.typed_reader == "gemini":
+            page1_ocr_args = ["--reader", "gemini", *page1_ocr_args]
         return [
             str(self.settings.ocr_python_executable),
             "-m",

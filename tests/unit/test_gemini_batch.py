@@ -341,3 +341,41 @@ def test_retry_clears_batch_state(session_factory, tmp_path) -> None:
         session.commit()
 
     assert _get(session_factory, job_id).gemini_batch_stage is None
+
+
+@pytest.mark.parametrize(
+    ("typed_reader", "document_type", "expected"),
+    [
+        ("vision", DocumentType.TYPED_NIKAH_MODERN, False),
+        ("gemini", DocumentType.TYPED_NIKAH_MODERN, True),
+        ("vision", DocumentType.HANDWRITTEN_REGISTER, True),
+    ],
+)
+def test_typed_jobs_batch_only_with_the_gemini_reader(
+    session_factory, tmp_path, typed_reader, document_type, expected
+) -> None:
+    job_id = _job(session_factory, tmp_path, document_type=document_type)
+    settings = Settings(storage_root=tmp_path, gemini_batch_enabled=True, typed_reader=typed_reader)
+    assert gemini_batch.should_batch(settings, _get(session_factory, job_id)) is expected
+
+
+def test_a_batched_typed_job_finishes_as_csv(session_factory, tmp_path, monkeypatch) -> None:
+    job_id = _submitted_job(session_factory, tmp_path)
+    with session_factory() as session:
+        session.execute(
+            update(OCRJob).where(OCRJob.id == job_id).values(document_type=DocumentType.TYPED_CERAI_MODERN.value)
+        )
+        session.commit()
+    completed: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        processing,
+        "complete_job",
+        lambda settings, sf, job, output_path, is_typed: completed.append((output_path.name, is_typed)),
+    )
+    runner = FakeBatchRunner()
+
+    gemini_batch.tick(
+        _settings(tmp_path, typed_reader="gemini"), session_factory, FakeExecutor(), runner, FakeOcrRunner()
+    )
+
+    assert completed == [("result.csv", True)]

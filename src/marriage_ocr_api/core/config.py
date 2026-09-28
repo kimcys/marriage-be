@@ -82,12 +82,19 @@ class Settings(BaseSettings):
     # bulk backlog runs. Off: every handwritten job calls Gemini live, as
     # before. See jobs/gemini_batch.py.
     gemini_batch_enabled: bool = False
+    # Who reads a typed certificate's form fields: "vision" (Google Vision OCR
+    # + template regions, the original reader) or "gemini" (Gemini reads the
+    # same regions; far more accurate on real samples, and -- through Gemini
+    # Batch Mode -- cheaper). Both feed the same normalizers. "gemini" falls
+    # back to "vision" per PDF on any Gemini error. See marriage-ocr's
+    # typed/gemini_reader.py.
+    typed_reader: str = "vision"
     gemini_batch_max_jobs: int = 500
     gemini_batch_fallback_hours: int = 30
     ocr_max_concurrent_jobs: int = 1
     ocr_stderr_api_limit: int = 1000
     marriage_ocr_git_url: str = "https://github.com/kimcys/marriage-ocr.git"
-    marriage_ocr_git_ref: str = "f77b2924db56576e58be2cf44f2aff10d4e11b29"
+    marriage_ocr_git_ref: str = "2c2d8e6eb61f71dbe664fef34bdc143d5c8fb639"
     google_application_credentials: str = "/run/secrets/google-vision.json"
     gemini_api_key: str = ""
     storage_backend: str = "local"
@@ -149,6 +156,14 @@ class Settings(BaseSettings):
         if value <= 0:
             field_name = (info.field_name or "value").upper()
             raise ValueError(f"{field_name} must be positive")
+        return value
+
+    @field_validator("typed_reader", mode="after")
+    @classmethod
+    def validate_typed_reader(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in {"vision", "gemini"}:
+            raise ValueError('TYPED_READER must be "vision" or "gemini"')
         return value
 
     @field_validator("onedrive_classify_stack_size", mode="after")

@@ -34,7 +34,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from marriage_ocr_api.batches.status import HANDWRITTEN_DOCUMENT_TYPES, DocumentType
+from marriage_ocr_api.batches.status import HANDWRITTEN_DOCUMENT_TYPES, TYPED_DOCUMENT_TYPES, DocumentType
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.db.models import OCRJob
 from marriage_ocr_api.jobs.runner import SubprocessOCRRunner
@@ -143,11 +143,14 @@ def _prepared_files(prepared_dir: Path) -> list[Path]:
 
 
 def should_batch(settings: Settings, job: OCRJob) -> bool:
-    return (
-        settings.gemini_batch_enabled
-        and job.gemini_batch_stage is None
-        and DocumentType(job.document_type) in HANDWRITTEN_DOCUMENT_TYPES
-    )
+    """Handwritten pages always use Gemini, so they batch whenever Batch Mode
+    is on; typed certificates only once TYPED_READER=gemini."""
+    if not settings.gemini_batch_enabled or job.gemini_batch_stage is not None:
+        return False
+    document_type = DocumentType(job.document_type)
+    if document_type in HANDWRITTEN_DOCUMENT_TYPES:
+        return True
+    return document_type in TYPED_DOCUMENT_TYPES and settings.typed_reader == "gemini"
 
 
 def _set_stage(session: Session, job_ids: list[UUID], stage: str, *, name: str | None = None) -> None:
@@ -315,7 +318,9 @@ def _finish_job(
     storage_root = settings.storage_root.resolve()
     input_path = storage_root / job.input_relative_path
     debug_path = storage_root / job.debug_relative_path
-    output_path = debug_path.parent / "output" / "result.xlsx"
+    # Same output file a live run of this job would write (process_ocr_job).
+    is_typed = DocumentType(job.document_type) in TYPED_DOCUMENT_TYPES
+    output_path = debug_path.parent / "output" / ("result.csv" if is_typed else "result.xlsx")
     try:
         _ensure_input_materialized(settings, input_path, job.input_relative_path)
         prepared_dir = _materialize_prepared(settings, job_id)
@@ -331,7 +336,7 @@ def _finish_job(
         if not ok or not output_path.is_file():
             fall_back_to_live(session_factory, executor, [job_id], "finish failed or a page had no batch result")
             return False
-        complete_job(settings, session_factory, job, output_path, is_typed=False)
+        complete_job(settings, session_factory, job, output_path, is_typed=is_typed)
         return True
     except Exception as error:
         logger.exception("finishing Gemini batch job %s failed", job_id)

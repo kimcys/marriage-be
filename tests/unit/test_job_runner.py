@@ -391,3 +391,26 @@ def test_page1_ocr_is_passed_only_to_process_typed(tmp_path: Path, document_type
 
     assert (command[-2:] == ["--page1-ocr", str(page1)]) is expects_flag
     assert ("--page1-ocr" in command) is expects_flag
+
+
+@pytest.mark.parametrize(
+    ("typed_reader", "document_type", "expects"),
+    [
+        ("gemini", DocumentType.TYPED_CERAI_MODERN, True),
+        ("vision", DocumentType.TYPED_CERAI_MODERN, False),
+        ("gemini", DocumentType.HANDWRITTEN_REGISTER, False),
+    ],
+)
+def test_gemini_typed_reader_flag(tmp_path: Path, typed_reader, document_type, expects) -> None:
+    from marriage_ocr_api.jobs.runner import OCRRunRequest
+
+    request = OCRRunRequest(
+        input_path=tmp_path / "source.pdf",
+        output_path=tmp_path / "out.csv",
+        debug_path=tmp_path / "debug",
+        stdout_log_path=tmp_path / "stdout.log",
+        stderr_log_path=tmp_path / "stderr.log",
+        document_type=document_type,
+    )
+    command = SubprocessOCRRunner(_settings(tmp_path, typed_reader=typed_reader))._build_command(request)
+    assert (command[-2:] == ["--reader", "gemini"]) is expects

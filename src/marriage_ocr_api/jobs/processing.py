@@ -186,15 +186,16 @@ def process_ocr_job(
         output_extension = ".csv" if is_typed else ".xlsx"
         output_path = debug_path.parent / "output" / f"result{output_extension}"
         _ensure_input_materialized(settings, input_path, job.input_relative_path)
-        if not is_typed:
-            from marriage_ocr_api.jobs import gemini_batch
+        from marriage_ocr_api.jobs import gemini_batch
 
-            if gemini_batch.should_batch(settings, job) and gemini_batch.prepare_job(
-                settings, session_factory, job, input_path, runner.config_path_for(document_type)
-            ):
-                # Waiting on a Gemini batch now; jobs/gemini_batch.py::tick
-                # submits it, finishes it, or falls back to a live run.
-                return
+        # should_batch decides per job: handwritten pages, and typed
+        # certificates once TYPED_READER=gemini.
+        if gemini_batch.should_batch(settings, job) and gemini_batch.prepare_job(
+            settings, session_factory, job, input_path, runner.config_path_for(document_type)
+        ):
+            # Waiting on a Gemini batch now; jobs/gemini_batch.py::tick
+            # submits it, finishes it, or falls back to a live run.
+            return
         request = OCRRunRequest(
             input_path=input_path,
             output_path=output_path,
