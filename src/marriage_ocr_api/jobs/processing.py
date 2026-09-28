@@ -24,6 +24,7 @@ from marriage_ocr_api.jobs.runner import (
 from marriage_ocr_api.jobs.status import JobStatus
 from marriage_ocr_api.records.importer import import_records_from_csv, import_records_from_xlsx
 from marriage_ocr_api.storage.factory import get_storage_service
+from marriage_ocr_api.storage.local_copies import remove_local_copies_for_job
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,15 @@ def complete_job(
             recompute_batch_status(session, job.batch_id)
         session.commit()
     logger.info("completed OCR job %s", job_id)
+    # Input and output now live in object storage; the worker's own copies
+    # (plus logs and any debug/batch files) would otherwise pile up until
+    # the disk fills. No-op unless STORAGE_BACKEND=s3.
+    try:
+        freed = remove_local_copies_for_job(settings, job)
+        if freed:
+            logger.info("removed %d bytes of local copies for OCR job %s", freed, job_id)
+    except Exception:
+        logger.warning("could not remove local copies for OCR job %s", job_id, exc_info=True)
 
 
 def process_ocr_job(

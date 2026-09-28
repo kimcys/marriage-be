@@ -14,6 +14,7 @@ from marriage_ocr_api.db.repositories import create_job
 from marriage_ocr_api.jobs.paths import JobPaths, build_job_paths
 from marriage_ocr_api.jobs.status import JobStatus
 from marriage_ocr_api.storage.factory import get_storage_service
+from marriage_ocr_api.storage.local_copies import remove_local_file_copy
 
 
 def document_paths(storage_root: Path, batch_id: UUID, document_id: UUID, extension: str = ".pdf") -> JobPaths:
@@ -65,6 +66,7 @@ def create_document_page_jobs(
     page_count: int,
     document_type: DocumentType,
 ) -> list[UUID]:
+    input_path_of_document = input_path
     staging_dir = input_path.parent / "pages"
     page_paths = split_pdf_into_pages(input_path, staging_dir)
     job_ids: list[UUID] = []
@@ -117,4 +119,8 @@ def create_document_page_jobs(
         raise
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
+    # Each page job has its own (uploaded) input now; the whole-document PDF
+    # is already in object storage too (uploaded by the caller before
+    # splitting), so its local copy is no longer needed. No-op unless s3.
+    remove_local_file_copy(settings, input_path_of_document)
     return job_ids

@@ -1101,6 +1101,10 @@ def test_split_page_inputs_reach_object_storage_for_a_worker_on_another_droplet(
     assert len(jobs) == 3
     for job in jobs:
         assert job.input_relative_path in storage.objects
+    # The whole-document PDF is in object storage; its local copy is gone.
+    document = list_documents(session, batch.id, limit=10, offset=0)[0]
+    assert document.storage_key in storage.objects
+    assert not (tmp_path / "api" / document.storage_key).exists()
     session.close()
 
 

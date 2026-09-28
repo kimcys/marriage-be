@@ -124,7 +124,9 @@ def test_process_ocr_job_materializes_missing_input_from_s3(tmp_path: Path, monk
     assert len(fake_storage.put_file_calls) == 1
     output_source, output_key = fake_storage.put_file_calls[0]
     assert output_key == f"jobs/{job_id}/output/result.xlsx"
-    assert output_source.exists()
+    # Uploaded, then the worker's local copy is removed -- object storage is
+    # the source of truth under s3 (see storage/local_copies.py).
+    assert not output_source.exists()
 
 
 def test_process_ocr_job_skips_materialize_when_input_already_local(
