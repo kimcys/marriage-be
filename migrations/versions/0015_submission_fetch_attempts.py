@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0015_add_submission_fetch_attempts"
+revision = "0015_submission_fetch_attempts"
 down_revision = "0014_add_gemini_batch_columns"
 branch_labels = None
 depends_on = None
