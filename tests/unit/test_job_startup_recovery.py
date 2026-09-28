@@ -70,7 +70,7 @@ def test_startup_recovery_marks_processing_jobs_failed(
     monkeypatch.setattr("marriage_ocr_api.main.SubprocessOCRRunner", FakeRunner)
     monkeypatch.setattr("marriage_ocr_api.main.JobExecutor", FakeExecutor)
 
-    with TestClient(create_app(Settings(storage_root=tmp_path))):
+    with TestClient(create_app(Settings(storage_root=tmp_path, job_executor_backend="thread_pool"))):
         pass
 
     check_session = session_factory()
@@ -128,3 +128,39 @@ def test_executor_processes_job_with_fresh_session(tmp_path: Path) -> None:
     assert job.completed_at is not None
     assert job.output_relative_path == f"jobs/{job_id}/output/result.xlsx"
     check_session.close()
+
+
+def test_startup_under_celery_leaves_processing_jobs_to_the_workers(monkeypatch, tmp_path: Path) -> None:
+    """With Celery the jobs run in separate worker containers, so an API
+    restart (every deploy) must not fail them."""
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    job_id = UUID("123e4567-e89b-12d3-a456-426614174599")
+    create_job(
+        session,
+        id=job_id,
+        status=JobStatus.PROCESSING,
+        original_filename="register.pdf",
+        stored_filename="source.pdf",
+        content_type="application/pdf",
+        file_size_bytes=1,
+        input_relative_path=f"jobs/{job_id}/input/source.pdf",
+        debug_relative_path=f"jobs/{job_id}/debug",
+        stdout_log_relative_path=f"jobs/{job_id}/logs/stdout.log",
+        stderr_log_relative_path=f"jobs/{job_id}/logs/stderr.log",
+        ocr_git_ref="abc123",
+        started_at=datetime.now(UTC),
+    )
+    session.commit()
+    session.close()
+
+    monkeypatch.setattr("marriage_ocr_api.main.get_session_factory", lambda settings: session_factory)
+
+    with TestClient(create_app(Settings(storage_root=tmp_path, job_executor_backend="celery"))):
+        pass
+
+    check_session = session_factory()
+    job = get_job(check_session, job_id)
+    assert job is not None
+    assert job.status == JobStatus.PROCESSING

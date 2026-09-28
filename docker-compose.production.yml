@@ -113,6 +113,11 @@ services:
       - ${GOOGLE_APPLICATION_CREDENTIALS:?set path to your google-vision.json on this Droplet}:/run/secrets/google-vision.json:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Docker's default 10s before SIGKILL cut running OCR jobs off on every
+    # worker deploy. On SIGTERM Celery stops taking new tasks and finishes
+    # the ones it has (seconds to a minute each); allow that, within the
+    # deploy step's 10-minute limit.
+    stop_grace_period: 5m
     restart: unless-stopped
     command:
       - /bin/sh

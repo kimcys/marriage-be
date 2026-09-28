@@ -55,9 +55,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         app.state.executor = JobExecutor(settings, session_factory, SubprocessOCRRunner(settings))
         app.state.onedrive_executor = OneDriveExecutor(settings, session_factory, app.state.executor)
-    with session_factory() as session:
-        recover_interrupted_jobs(session)
-        session.commit()
+    if settings.job_executor_backend != "celery":
+        # Only with the in-process executor do this process's own jobs die
+        # with it. Under Celery, jobs run in separate worker containers
+        # (another Droplet in production), so a PROCESSING job may still be
+        # running fine -- failing it here made every API deploy fail
+        # in-flight OCR. Truly abandoned Celery jobs are caught by the
+        # periodic recover-stale-ocr-jobs beat task instead.
+        with session_factory() as session:
+            recover_interrupted_jobs(session)
+            session.commit()
     yield
     app.state.executor.shutdown()
     app.state.onedrive_executor.shutdown()
