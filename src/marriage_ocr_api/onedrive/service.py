@@ -517,6 +517,7 @@ def _classify_files(
     stack_size: int,
     cache: _ClassifyCache | None = None,
     digests: dict[Path, str] | None = None,
+    stack_pdfs: bool = False,
 ) -> dict[Path, Classification | ClassifyError]:
     """Classify every file, stacking consecutive single-image files up to
     `stack_size` per Vision call (marriage-ocr `classify-stack`) -- PDFs are
@@ -572,7 +573,12 @@ def _classify_files(
 
     stack: list[Path] = []
     for file_path in pending:
-        if stack_size <= 1 or file_path.suffix.lower() == ".pdf":
+        # A PDF is classified on its own while the Vision typed reader is in
+        # use -- that call doubles as its page-1 OCR (see
+        # jobs/paths.py::page1_ocr_relative_path). With TYPED_READER=gemini
+        # nothing reuses it, so PDFs stack too (3 per call; a stack of only
+        # typed forms also skips the Jawi pass).
+        if stack_size <= 1 or (file_path.suffix.lower() == ".pdf" and not stack_pdfs):
             classify_one(file_path)
             continue
         stack.append(file_path)
@@ -723,6 +729,7 @@ def run_onedrive_fetch(
                 settings.onedrive_classify_stack_size,
                 cache=_ClassifyCache(work_dir / "classify-cache"),
                 digests=digests,
+                stack_pdfs=settings.typed_reader == "gemini",
             )
             for file_path in to_classify:
                 result = results[file_path]

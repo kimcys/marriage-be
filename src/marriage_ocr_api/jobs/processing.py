@@ -136,6 +136,17 @@ def complete_job(
     # Input and output now live in object storage; the worker's own copies
     # (plus logs and any debug/batch files) would otherwise pile up until
     # the disk fills. No-op unless STORAGE_BACKEND=s3.
+    if job.gemini_batch_stage is not None:
+        # This job went through Gemini Batch Mode at some point: drop its
+        # helper copies from object storage too (only those -- see
+        # gemini_batch.delete_prepared_from_object_storage). Before the local
+        # cleanup below, which removes the manifest listing them.
+        try:
+            from marriage_ocr_api.jobs.gemini_batch import delete_prepared_from_object_storage
+
+            delete_prepared_from_object_storage(settings, job.id)
+        except Exception:
+            logger.warning("could not remove Gemini batch helper copies for OCR job %s", job_id, exc_info=True)
     try:
         freed = remove_local_copies_for_job(settings, job)
         if freed:

@@ -379,3 +379,54 @@ def test_a_batched_typed_job_finishes_as_csv(session_factory, tmp_path, monkeypa
     )
 
     assert completed == [("result.csv", True)]
+
+
+class RecordingStorage:
+    def __init__(self, objects: dict[str, bytes]) -> None:
+        self.objects = dict(objects)
+        self.deleted: list[str] = []
+
+    def exists(self, key):
+        return key in self.objects
+
+    def materialize(self, key, destination):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(self.objects[key])
+        return destination
+
+    def delete(self, key):
+        self.deleted.append(key)
+        self.objects.pop(key, None)
+
+
+def test_only_the_batch_helper_copies_are_deleted_from_object_storage(tmp_path, monkeypatch) -> None:
+    job_id = uuid4()
+    prefix = f"gemini-batch/{job_id}/prepared"
+    manifest = json.dumps({"pages": [{"index": 1, "image": "page_1.jpg"}, {"index": 2, "image": "page_2.jpg"}]})
+    storage = RecordingStorage(
+        {
+            f"{prefix}/manifest.json": manifest.encode(),
+            f"{prefix}/page_1.jpg": b"a",
+            f"{prefix}/page_2.jpg": b"b",
+            "batches/b/documents/d/input/source.jpg": b"original",
+            "batches/b/documents/d/output/result.xlsx": b"result",
+        }
+    )
+    monkeypatch.setattr(gemini_batch, "get_storage_service", lambda settings: storage)
+
+    deleted = gemini_batch.delete_prepared_from_object_storage(
+        Settings(storage_root=tmp_path, storage_backend="s3"), job_id
+    )
+
+    assert deleted == 3
+    assert sorted(storage.deleted) == sorted(
+        [f"{prefix}/manifest.json", f"{prefix}/page_1.jpg", f"{prefix}/page_2.jpg"]
+    )
+    assert set(storage.objects) == {
+        "batches/b/documents/d/input/source.jpg",
+        "batches/b/documents/d/output/result.xlsx",
+    }
+
+
+def test_nothing_is_deleted_from_object_storage_without_s3(tmp_path) -> None:
+    assert gemini_batch.delete_prepared_from_object_storage(Settings(storage_root=tmp_path), uuid4()) == 0

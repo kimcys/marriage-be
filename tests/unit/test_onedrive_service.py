@@ -1279,7 +1279,9 @@ class RecordingStackRunner(FakeFetchRunner):
         return [self._classifications[path.name] for path in file_paths]
 
 
-def _run_with_stack_runner(tmp_path: Path, runner: RecordingStackRunner, stack_size: int = 3):
+def _run_with_stack_runner(
+    tmp_path: Path, runner: RecordingStackRunner, stack_size: int = 3, typed_reader: str = "vision"
+):
     engine = _engine()
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     session = session_factory()
@@ -1288,7 +1290,7 @@ def _run_with_stack_runner(tmp_path: Path, runner: RecordingStackRunner, stack_s
     session.commit()
     session.close()
     job_executor = FakeJobExecutor()
-    settings = Settings(storage_root=tmp_path, onedrive_classify_stack_size=stack_size)
+    settings = Settings(storage_root=tmp_path, onedrive_classify_stack_size=stack_size, typed_reader=typed_reader)
     run_onedrive_fetch(submission.id, settings, session_factory, job_executor, runner)
     return job_executor
 
@@ -1652,3 +1654,16 @@ def test_a_lost_pending_fetch_is_requeued() -> None:
     assert executor.submitted == [lost.id]
     assert recent.id not in executor.submitted
     session.close()
+
+
+def test_pdfs_are_stacked_too_once_the_gemini_typed_reader_is_on(tmp_path: Path) -> None:
+    names = ["a.pdf", "b.pdf", "c.pdf", "d.pdf"]
+    runner = RecordingStackRunner(
+        files={name: _sample_bytes(name) for name in names},
+        classifications={name: _classification() for name in names},
+    )
+
+    _run_with_stack_runner(tmp_path, runner, typed_reader="gemini")
+
+    assert runner.stack_calls == [["a.pdf", "b.pdf", "c.pdf"]]
+    assert runner.single_calls == ["d.pdf"]

@@ -72,12 +72,22 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--apply", action="store_true", help="actually delete (default: dry run)")
+    parser.add_argument(
+        "--batch-helpers",
+        action="store_true",
+        help=(
+            "instead: remove Gemini Batch Mode helper copies (gemini-batch/<job>/prepared/*) from object "
+            "storage for COMPLETED jobs only -- never documents, pages or outputs"
+        ),
+    )
     args = parser.parse_args(argv)
     settings = get_settings()
     if settings.storage_backend != "s3":
         print("Refusing: STORAGE_BACKEND is not s3, so local files are the originals.", file=sys.stderr)
         return 2
     storage = get_storage_service(settings)
+    if args.batch_helpers:
+        return _clean_batch_helpers(settings, storage, apply=args.apply)
     with get_session_factory(settings)() as session:
         removable, skipped = plan(settings, session, storage)
     total = 0
@@ -93,6 +103,33 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  left untouched ({reason}): {count}")
     if not args.apply:
         print("Dry run only -- re-run with --apply to delete.")
+    return 0
+
+
+def _clean_batch_helpers(settings: Settings, storage: StorageService, *, apply: bool) -> int:
+    from marriage_ocr_api.jobs.gemini_batch import delete_prepared_from_object_storage
+
+    with get_session_factory(settings)() as session:
+        job_ids = list(
+            session.scalars(
+                select(OCRJob.id).where(
+                    OCRJob.status == JobStatus.COMPLETED.value, OCRJob.gemini_batch_stage.is_not(None)
+                )
+            )
+        )
+    found = [job_id for job_id in job_ids if storage.exists(f"gemini-batch/{job_id}/prepared/manifest.json")]
+    deleted = 0
+    if apply:
+        for job_id in found:
+            deleted += delete_prepared_from_object_storage(settings, job_id)
+    verb = "Removed" if apply else "Would remove"
+    print(
+        f"{verb} Gemini batch helper copies for {len(found)} completed job(s)"
+        + (f" ({deleted} objects)" if apply else "")
+    )
+    print("Only gemini-batch/<job>/prepared/* -- documents, pages and outputs are never touched.")
+    if not apply:
+        print("Dry run only -- re-run with --batch-helpers --apply to delete.")
     return 0
 
 

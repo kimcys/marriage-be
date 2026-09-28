@@ -142,6 +142,30 @@ def _prepared_files(prepared_dir: Path) -> list[Path]:
     return [prepared_dir / "manifest.json", *(prepared_dir / page["image"] for page in manifest["pages"])]
 
 
+def delete_prepared_from_object_storage(settings: Settings, job_id: UUID) -> int:
+    """Remove a finished job's Batch Mode helper copies from object storage --
+    ONLY gemini-batch/<job>/prepared/manifest.json and the page images that
+    manifest names, each deleted by its exact key (nothing is deleted by
+    prefix). These are resized copies made just to send pages to Gemini;
+    the job's real input, pages and outputs are never touched. Returns the
+    number of objects deleted; a no-op unless STORAGE_BACKEND=s3."""
+    if settings.storage_backend != "s3":
+        return 0
+    relative_dir = _prepared_relative_dir(job_id)
+    manifest_key = f"{relative_dir}/manifest.json"
+    manifest_path = settings.storage_root.resolve() / manifest_key
+    storage = get_storage_service(settings)
+    if not manifest_path.is_file():
+        if not storage.exists(manifest_key):
+            return 0
+        storage.materialize(manifest_key, manifest_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    keys = [f"{relative_dir}/{page['image']}" for page in manifest.get("pages", [])] + [manifest_key]
+    for key in keys:
+        storage.delete(key)
+    return len(keys)
+
+
 def should_batch(settings: Settings, job: OCRJob) -> bool:
     """Handwritten pages always use Gemini, so they batch whenever Batch Mode
     is on; typed certificates only once TYPED_READER=gemini."""
