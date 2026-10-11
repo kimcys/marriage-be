@@ -7,7 +7,8 @@ DRY RUN BY DEFAULT: prints what it would do and changes nothing. Pass
   1. checks the original is still in object storage (skips the job if not),
   2. deletes that job's records (and revisions) -- the importer skips keys that
      already exist, so a re-run could not otherwise replace them,
-  3. resets the job to PENDING and enqueues it on Celery, like the retry button.
+  3. resets the job to PENDING and enqueues it on Celery, like the retry button
+     (on --queue if given, so a dedicated worker can take them).
 Only originals' derived rows change: nothing in Spaces is deleted, and the
 Gemini-batch helper copies are handled by the normal job flow.
 
@@ -50,6 +51,8 @@ FIELD = "Mas Kahwin"
 def _eligible_job_ids(session, args) -> list[UUID]:
     typed = [t.value if hasattr(t, "value") else str(t) for t in TYPED_DOCUMENT_TYPES]
     stmt = select(OCRJob.id).where(OCRJob.status == JobStatus.COMPLETED.value, OCRJob.document_type.in_(typed))
+    if args.job_id:
+        stmt = stmt.where(OCRJob.id.in_(args.job_id))
     if args.batch_id:
         stmt = stmt.where(OCRJob.batch_id.in_(args.batch_id))
     if args.created_on:
@@ -81,8 +84,10 @@ def _eligible_job_ids(session, args) -> list[UUID]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--batch-id", type=UUID, action="append", help="limit to this batch (repeatable)")
+    parser.add_argument("--job-id", type=UUID, action="append", help="limit to these jobs (repeatable)")
     parser.add_argument("--created-on", type=date.fromisoformat, help="limit to jobs created that UTC day")
     parser.add_argument("--limit", type=int, default=20, help="max jobs per run (default 20; 0 = no limit)")
+    parser.add_argument("--queue", help="Celery queue to send the jobs to (default: the normal ocr_jobs queue)")
     parser.add_argument("--execute", action="store_true", help="actually delete records and re-enqueue")
     args = parser.parse_args()
 
@@ -121,7 +126,7 @@ def main() -> None:
             job.gemini_batch_updated_at = None
             session.commit()
         try:
-            run_ocr_job.delay(str(job_id))
+            run_ocr_job.apply_async(args=[str(job_id)], queue=args.queue)
         except Exception as exc:  # leave it FAILED so the UI retry button still works
             with session_factory() as session:
                 job_repositories.mark_failed(

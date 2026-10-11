@@ -69,5 +69,14 @@ def test_selects_only_untouched_jobs_without_mas_kahwin() -> None:
     _job_with_record(session, missing=[], mas_kahwin="RM 80.00")  # fine
     approved_empty = _job_with_record(session, missing=[])  # auto-approved with Mas Kahwin empty
 
-    args = Namespace(batch_id=None, created_on=None, limit=0)
+    args = Namespace(job_id=None, batch_id=None, created_on=None, limit=0)
     assert reprocess._eligible_job_ids(session, args) == [eligible, approved_empty]
+
+
+def test_job_id_filter_restricts_selection() -> None:
+    session = _session()
+    first = _job_with_record(session, missing=["Mas Kahwin"])
+    _job_with_record(session, missing=["Mas Kahwin"])
+
+    args = Namespace(job_id=[first], batch_id=None, created_on=None, limit=0)
+    assert reprocess._eligible_job_ids(session, args) == [first]
