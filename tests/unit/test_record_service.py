@@ -295,7 +295,10 @@ def test_import_records_from_csv_keeps_raw_mas_kahwin_out_of_field_values(sessio
     import_records_from_csv(session, job_id, payload)
     session.commit()
 
-    by_bil = {r.field_values["Bil"]: r for r in list_records(session, job_id=job_id, batch_id=None, status=None, limit=10, offset=0)}
+    by_bil = {
+        r.field_values["Bil"]: r
+        for r in list_records(session, job_id=job_id, batch_id=None, status=None, limit=10, offset=0)
+    }
     assert "Mas Kahwin Raw" not in by_bil["35/92"].field_values
     assert by_bil["35/92"].normalized_data["raw"] == {"Mas Kahwin": "$.80.00"}
     assert by_bil["35/92"].normalized_data["Nama Suami"] == "Ahmad"
