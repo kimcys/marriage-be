@@ -51,7 +51,7 @@ from marriage_ocr_api.records.service import (
     bulk_approve_records,
     delete_record,
 )
-from marriage_ocr_api.records.status import RecordStatus
+from marriage_ocr_api.records.status import RecordSort, RecordStatus
 
 router = APIRouter()
 
@@ -104,6 +104,10 @@ def list_all_records(
     record_type: str | None = Query(default=None, description="Filter to this record type (NIKAH, CERAI, or RUJUK)"),
     daerah: str | None = Query(default=None, description="Filter to records whose batch is in this daerah"),
     negeri: str | None = Query(default=None, description="Filter to records whose batch is in this negeri"),
+    sort: RecordSort = Query(
+        default=RecordSort.NEWEST,
+        description="newest (default), or worst_first: most missing fields/issues and lowest confidence first",
+    ),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
@@ -118,6 +122,7 @@ def list_all_records(
         record_type=record_type,
         daerah=daerah,
         negeri=negeri,
+        sort=sort,
         limit=limit,
         offset=offset,
     )

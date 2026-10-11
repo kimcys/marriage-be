@@ -1590,6 +1590,14 @@
         "title": "RecordRevisionResponse",
         "type": "object"
       },
+      "RecordSort": {
+        "enum": [
+          "newest",
+          "worst_first"
+        ],
+        "title": "RecordSort",
+        "type": "string"
+      },
       "RecordStatus": {
         "enum": [
           "PENDING_REVIEW",
@@ -3576,6 +3584,17 @@
               ],
               "description": "Filter to records whose batch is in this negeri",
               "title": "Negeri"
+            }
+          },
+          {
+            "description": "newest (default), or worst_first: most missing fields/issues and lowest confidence first",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RecordSort",
+              "default": "newest",
+              "description": "newest (default), or worst_first: most missing fields/issues and lowest confidence first"
             }
           },
           {

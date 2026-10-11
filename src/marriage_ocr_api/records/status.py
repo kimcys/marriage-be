@@ -8,6 +8,13 @@ class RecordStatus(StrEnum):
     APPROVED = "APPROVED"
 
 
+class RecordSort(StrEnum):
+    NEWEST = "newest"
+    # Review order: most missing fields first, then most validation issues,
+    # then lowest OCR confidence (records with no confidence last).
+    WORST_FIRST = "worst_first"
+
+
 # Below this, the OCR/Gemini extraction itself signaled low confidence in what
 # it read -- a record needs a reviewer's eyes even when every field has a
 # value. Kept alongside RecordStatus since it's the other half of "does this

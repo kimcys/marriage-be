@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from marriage_ocr_api.batches.models import Batch, Document
 from marriage_ocr_api.onedrive.models import OneDriveSubmission
 from marriage_ocr_api.records.models import OCRRecord, RecordRevision
-from marriage_ocr_api.records.status import LOW_CONFIDENCE_THRESHOLD, RecordStatus
+from marriage_ocr_api.records.status import LOW_CONFIDENCE_THRESHOLD, RecordSort, RecordStatus
 
 
 class RecordNotFoundError(RuntimeError):
@@ -276,6 +276,7 @@ def list_records(
     record_type: str | None = None,
     daerah: str | None = None,
     negeri: str | None = None,
+    sort: RecordSort = RecordSort.NEWEST,
     limit: int,
     offset: int,
 ) -> list[OCRRecord]:
@@ -291,7 +292,17 @@ def list_records(
         daerah=daerah,
         negeri=negeri,
     )
-    stmt = stmt.order_by(OCRRecord.created_at.desc(), OCRRecord.id.desc()).limit(limit).offset(offset)
+    if sort == RecordSort.WORST_FIRST:
+        stmt = stmt.order_by(
+            func.json_array_length(OCRRecord.missing_fields).desc(),
+            func.json_array_length(OCRRecord.validation_issues).desc(),
+            OCRRecord.confidence.asc().nulls_last(),
+            OCRRecord.created_at.desc(),
+            OCRRecord.id.desc(),
+        )
+    else:
+        stmt = stmt.order_by(OCRRecord.created_at.desc(), OCRRecord.id.desc())
+    stmt = stmt.limit(limit).offset(offset)
     return list(session.scalars(stmt))
 
 

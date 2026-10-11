@@ -334,3 +334,41 @@ def test_append_revision_tracks_history(session: Session) -> None:
     assert len(revisions) == 1
     assert revisions[0].version == 2
     assert revisions[0].note == "corrected surname"
+
+
+def test_list_records_worst_first_orders_by_missing_fields_issues_then_confidence(session: Session) -> None:
+    from marriage_ocr_api.records.status import RecordSort
+
+    job_id = _job(session)
+
+    def make(key: str, *, missing: list[str], issues: list[str], confidence: float | None) -> None:
+        create_record(
+            session,
+            job_id=job_id,
+            source_key=key,
+            field_values={"k": key},
+            confidence=confidence,
+            validation_issues=issues,
+            missing_fields=missing,
+        )
+
+    make("fine-low-conf", missing=[], issues=[], confidence=0.5)
+    make("two-missing", missing=["a", "b"], issues=["x"], confidence=None)
+    make("one-missing-many-issues", missing=["a"], issues=["x", "y", "z"], confidence=0.9)
+    make("one-missing-few-issues", missing=["a"], issues=["x"], confidence=0.1)
+    make("fine-no-conf", missing=[], issues=[], confidence=None)
+    session.commit()
+
+    keys = [
+        record.source_key
+        for record in list_records(
+            session, job_id=job_id, batch_id=None, status=None, sort=RecordSort.WORST_FIRST, limit=10, offset=0
+        )
+    ]
+    assert keys == [
+        "two-missing",
+        "one-missing-many-issues",
+        "one-missing-few-issues",
+        "fine-low-conf",
+        "fine-no-conf",
+    ]

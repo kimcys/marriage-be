@@ -31,7 +31,7 @@ jobs:
       OCR_MODULE: tests.fixtures.fake_ocr_cli
       OCR_MAX_CONCURRENT_JOBS: 1
       MARRIAGE_OCR_GIT_URL: https://github.com/kimcys/marriage-ocr.git
-      MARRIAGE_OCR_GIT_REF: 62943e5d7c121d186ba53ef675cfc8f2c442629e
+      MARRIAGE_OCR_GIT_REF: c99ed347a1f6748f14d0934315cfe5213cac8a18
       GOOGLE_APPLICATION_CREDENTIALS: /tmp/fake-google.json
       GEMINI_API_KEY: ""
     steps:
@@ -85,7 +85,7 @@ jobs:
       OCR_MODULE: tests.fixtures.fake_ocr_cli
       OCR_MAX_CONCURRENT_JOBS: 1
       MARRIAGE_OCR_GIT_URL: https://github.com/kimcys/marriage-ocr.git
-      MARRIAGE_OCR_GIT_REF: 62943e5d7c121d186ba53ef675cfc8f2c442629e
+      MARRIAGE_OCR_GIT_REF: c99ed347a1f6748f14d0934315cfe5213cac8a18
       GOOGLE_APPLICATION_CREDENTIALS: /tmp/fake-google.json
       GEMINI_API_KEY: ""
     steps:

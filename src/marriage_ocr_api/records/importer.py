@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -33,6 +34,7 @@ _TYPED_METADATA_COLUMNS = {
     "Error Message",
     # Kept in OCRRecord.normalized_data["raw"] instead -- see import_records_from_csv.
     "Mas Kahwin Raw",
+    "Raw Fields",
 }
 
 # A field marriage-ocr genuinely couldn't fill in (blank in the source
@@ -173,11 +175,22 @@ def _typed_missing_fields(record: dict[str, object]) -> list[str]:
 
 
 def _typed_normalized_data(record: dict[str, object], field_values: dict[str, object]) -> dict[str, object] | None:
-    # The reader's text before normalization, so a blank "Mas Kahwin" can be
-    # told apart from one the normalizer rejected. None (-> create_record's
-    # usual copy of field_values) for CSVs written before the column existed.
-    raw = str(record.get("Mas Kahwin Raw") or "").strip()
-    return {**field_values, "raw": {"Mas Kahwin": raw}} if raw else None
+    # The reader's text before normalization, so a blank field can be told
+    # apart from one the normalizer rejected or the reader never saw: the
+    # "Mas Kahwin Raw" column (keyed "Mas Kahwin") plus the "Raw Fields" JSON
+    # (keyed by raw field key, e.g. "id_suami"). None (-> create_record's usual
+    # copy of field_values) for CSVs written before those columns existed.
+    raw: dict[str, str] = {}
+    try:
+        parsed = json.loads(str(record.get("Raw Fields") or "{}"))
+    except ValueError:
+        parsed = {}
+    if isinstance(parsed, dict):
+        raw.update({str(key): str(value) for key, value in parsed.items() if str(value).strip()})
+    mas_kahwin_raw = str(record.get("Mas Kahwin Raw") or "").strip()
+    if mas_kahwin_raw:
+        raw["Mas Kahwin"] = mas_kahwin_raw
+    return {**field_values, "raw": raw} if raw else None
 
 
 def import_records_from_csv(

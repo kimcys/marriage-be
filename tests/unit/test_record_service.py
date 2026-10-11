@@ -303,3 +303,22 @@ def test_import_records_from_csv_keeps_raw_mas_kahwin_out_of_field_values(sessio
     assert by_bil["35/92"].normalized_data["raw"] == {"Mas Kahwin": "$.80.00"}
     assert by_bil["35/92"].normalized_data["Nama Suami"] == "Ahmad"
     assert "raw" not in by_bil["36/92"].normalized_data
+
+
+def test_import_records_from_csv_keeps_raw_fields_json(session: Session, tmp_path: Path) -> None:
+    from marriage_ocr_api.records.importer import import_records_from_csv
+
+    job_id = _job(session)
+    payload = tmp_path / "typed.csv"
+    payload.write_text(
+        "Bil,Nama Suami,Source File,Failed Fields,Raw Fields\n"
+        '1/92,Ahmad,a.pdf,IC Suami,"{""id_suami"": ""A0785338""}"\n',
+        encoding="utf-8-sig",
+    )
+
+    import_records_from_csv(session, job_id, payload)
+    session.commit()
+
+    (record,) = list_records(session, job_id=job_id, batch_id=None, status=None, limit=10, offset=0)
+    assert "Raw Fields" not in record.field_values
+    assert record.normalized_data["raw"] == {"id_suami": "A0785338"}
