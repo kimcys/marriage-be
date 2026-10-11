@@ -322,3 +322,32 @@ def test_import_records_from_csv_keeps_raw_fields_json(session: Session, tmp_pat
     (record,) = list_records(session, job_id=job_id, batch_id=None, status=None, limit=10, offset=0)
     assert "Raw Fields" not in record.field_values
     assert record.normalized_data["raw"] == {"id_suami": "A0785338"}
+
+
+def test_import_records_from_csv_keeps_word_amounts_in_review(session: Session, tmp_path: Path) -> None:
+    from marriage_ocr_api.records.importer import import_records_from_csv
+
+    job_id = _job(session)
+    payload = tmp_path / "typed.csv"
+    payload.write_text(
+        "Bil,Nama Suami,Mas Kahwin,Source File,Failed Fields,Mas Kahwin Raw\n"
+        "5/92,Halim,RM 80,a.pdf,,lapan puluh\n"
+        "6/92,Ali,RM 80.00,b.pdf,,RM 80.00\n"
+        "7/92,Abu,,c.pdf,Mas Kahwin,tiada\n",
+        encoding="utf-8-sig",
+    )
+
+    import_records_from_csv(session, job_id, payload)
+    session.commit()
+
+    by_bil = {
+        r.field_values["Bil"]: r
+        for r in list_records(session, job_id=job_id, batch_id=None, status=None, limit=10, offset=0)
+    }
+    words = by_bil["5/92"]
+    assert words.field_values["Mas Kahwin"] == "RM 80"  # the converted amount stays visible
+    assert words.status == RecordStatus.PENDING_REVIEW.value
+    assert words.missing_fields == ["Mas Kahwin"]
+    assert any("written in words" in issue for issue in words.validation_issues)
+    assert by_bil["6/92"].status == RecordStatus.APPROVED.value  # a normal amount is untouched
+    assert by_bil["7/92"].missing_fields == ["Mas Kahwin"]  # no duplicate flag

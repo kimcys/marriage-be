@@ -174,6 +174,24 @@ def _typed_missing_fields(record: dict[str, object]) -> list[str]:
     return _split_semicolon_list(record.get("Failed Fields"))
 
 
+def _flag_amount_read_from_words(
+    record: dict[str, object],
+    field_values: dict[str, object],
+    issues: list[str],
+    missing: list[str],
+) -> tuple[list[str], list[str]]:
+    """A Mas Kahwin the reader gave as words ("lapan puluh") is converted to an
+    amount by marriage-ocr, but the same scan has been read as a different
+    word on another run (RM 80 vs RM 10) -- so it never auto-approves: it stays
+    in the review queue, filled in, with a note to confirm it against the scan."""
+    raw = str(record.get("Mas Kahwin Raw") or "").strip()
+    value = str(field_values.get("Mas Kahwin") or "").strip()
+    if not (raw and value) or any(char.isdigit() for char in raw):
+        return issues, missing
+    note = f"mas kahwin was written in words ({raw!r}), read as {value}; confirm against the scan"
+    return [*issues, note], missing if "Mas Kahwin" in missing else [*missing, "Mas Kahwin"]
+
+
 def _typed_normalized_data(record: dict[str, object], field_values: dict[str, object]) -> dict[str, object] | None:
     # The reader's text before normalization, so a blank field can be told
     # apart from one the normalizer rejected or the reader never saw: the
@@ -235,6 +253,10 @@ def import_records_from_csv(
             source_file = record.get("Source File")
             source_key = f"{source_file}" if source_file else f"row-{row_index}"
 
+            issues, missing = _flag_amount_read_from_words(
+                record, field_values, _typed_validation_issues(record), _typed_missing_fields(record)
+            )
+
             # Not given the same empty-field-placeholder + confidence-driven
             # review treatment as the handwritten XLSX path below: the typed
             # pipeline never has a numeric Confidence (always None), so
@@ -251,8 +273,8 @@ def import_records_from_csv(
                     "source_record_index": 0,
                     "field_values": field_values,
                     "confidence": None,
-                    "validation_issues": _typed_validation_issues(record),
-                    "missing_fields": _typed_missing_fields(record),
+                    "validation_issues": issues,
+                    "missing_fields": missing,
                     "normalized_data": _typed_normalized_data(record, field_values),
                 },
             ):
