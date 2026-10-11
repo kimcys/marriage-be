@@ -1,5 +1,6 @@
-"""Re-run OCR for typed jobs whose records only need review because Mas Kahwin
-was lost (see typed/normalizer.py::normalize_mas_kahwin).
+"""Re-run OCR for typed jobs whose records lost their Mas Kahwin (see
+typed/normalizer.py::normalize_mas_kahwin) -- whether that left them waiting in
+the review queue or auto-approved with the field empty.
 
 DRY RUN BY DEFAULT: prints what it would do and changes nothing. Pass
 --execute to act. For each eligible job, --execute:
@@ -11,23 +12,26 @@ Only originals' derived rows change: nothing in Spaces is deleted, and the
 Gemini-batch helper copies are handled by the normal job flow.
 
 Eligible = COMPLETED typed job where EVERY record is untouched by a human
-(version 1, no reviewer), still PENDING_REVIEW, and lists "Mas Kahwin" in
-missing_fields. A job with any edited or approved record is skipped.
+(version 1, no reviewer -- a manual edit or approve bumps both) and has no
+Mas Kahwin value (empty, or listed in missing_fields). A job with any edited
+or manually approved record is skipped.
 
-Run inside the api container, e.g.
+scripts/ is not copied into the image, so pipe it into the api container:
   docker compose --env-file .env.production exec -T api \
-      python scripts/reprocess_typed_jobs.py --created-on 2026-09-26 --limit 20
+      python - --created-on 2026-09-26 --limit 20 < scripts/reprocess_typed_jobs.py
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+with contextlib.suppress(NameError):  # no __file__ when piped to `python -` (package is installed in the container)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sqlalchemy import delete, select  # noqa: E402
 
@@ -56,15 +60,17 @@ def _eligible_job_ids(session, args) -> list[UUID]:
     eligible: list[UUID] = []
     for job_id in session.scalars(stmt):
         records = session.execute(
-            select(OCRRecord.status, OCRRecord.version, OCRRecord.reviewed_by, OCRRecord.missing_fields).where(
+            select(OCRRecord.version, OCRRecord.reviewed_by, OCRRecord.missing_fields, OCRRecord.field_values).where(
                 OCRRecord.job_id == job_id
             )
         ).all()
         if not records:
             continue
         if all(
-            status == "PENDING_REVIEW" and version == 1 and reviewer is None and FIELD in (missing or [])
-            for status, version, reviewer, missing in records
+            version == 1
+            and reviewer is None
+            and (FIELD in (missing or []) or not str((values or {}).get(FIELD) or "").strip())
+            for version, reviewer, missing, values in records
         ):
             eligible.append(job_id)
             if args.limit and len(eligible) >= args.limit:

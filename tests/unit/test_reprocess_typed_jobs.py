@@ -29,7 +29,7 @@ def _session():
     return sessionmaker(bind=engine, expire_on_commit=False)()
 
 
-def _job_with_record(session, *, missing, version=1, reviewer=None, status="PENDING_REVIEW"):
+def _job_with_record(session, *, missing, version=1, reviewer=None, mas_kahwin=None):
     job_id = uuid4()
     create_job(
         session,
@@ -50,7 +50,7 @@ def _job_with_record(session, *, missing, version=1, reviewer=None, status="PEND
         session,
         job_id=job_id,
         source_key="source.pdf",
-        field_values={"Bil": "1/92"},
+        field_values={"Bil": "1/92", **({"Mas Kahwin": mas_kahwin} if mas_kahwin else {})},
         confidence=None,
         validation_issues=[],
         missing_fields=missing,
@@ -61,12 +61,13 @@ def _job_with_record(session, *, missing, version=1, reviewer=None, status="PEND
     return job_id
 
 
-def test_selects_only_untouched_jobs_missing_mas_kahwin() -> None:
+def test_selects_only_untouched_jobs_without_mas_kahwin() -> None:
     session = _session()
     eligible = _job_with_record(session, missing=["Mas Kahwin"])
     _job_with_record(session, missing=["Mas Kahwin"], version=2, reviewer="r@example.com")  # human edited
-    _job_with_record(session, missing=["IC Suami"])  # different problem
-    _job_with_record(session, missing=[])  # not flagged
+    _job_with_record(session, missing=["IC Suami"], mas_kahwin="RM 80.00")  # different problem, value present
+    _job_with_record(session, missing=[], mas_kahwin="RM 80.00")  # fine
+    approved_empty = _job_with_record(session, missing=[])  # auto-approved with Mas Kahwin empty
 
     args = Namespace(batch_id=None, created_on=None, limit=0)
-    assert reprocess._eligible_job_ids(session, args) == [eligible]
+    assert reprocess._eligible_job_ids(session, args) == [eligible, approved_empty]
