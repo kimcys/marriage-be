@@ -125,7 +125,7 @@ services:
     command:
       - /bin/sh
       - -c
-      - "exec celery -A marriage_ocr_api.jobs.celery_app worker --loglevel=info --concurrency=${OCR_MAX_CONCURRENT_JOBS:-4} -Q ${WORKER_QUEUES:-ocr_jobs}"
+      - "exec celery -A marriage_ocr_api.jobs.celery_app worker --loglevel=info --concurrency=${OCR_MAX_CONCURRENT_JOBS:-4} -Q ${WORKER_QUEUES:-ocr_jobs,ocr_maintenance}"
 
   # Run this on exactly ONE Droplet, total -- Celery beat is a singleton
   # scheduler; a second instance would double-fire every periodic task

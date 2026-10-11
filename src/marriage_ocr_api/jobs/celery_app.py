@@ -13,6 +13,12 @@ celery_app = Celery(
     backend=settings.valkey_url,
 )
 celery_app.conf.task_default_queue = "ocr_jobs"
+# Scheduler/housekeeping tasks (Gemini batch tick, stale-job recovery) get
+# their own queue: on the shared queue they waited behind hundreds of OCR jobs
+# and 30-50 minute OneDrive downloads that held every worker slot, so batches
+# were never submitted or collected. Every worker listens to it by default
+# (docker-compose WORKER_QUEUES), so a tick always has a consumer.
+MAINTENANCE_QUEUE = "ocr_maintenance"
 celery_app.conf.task_track_started = True
 
 # If a worker is killed mid-job (OOM, node eviction), a not-yet-acked task is
@@ -50,6 +56,7 @@ celery_app.conf.beat_schedule = {
         # document/batch for long, cheap enough (one indexed query when
         # nothing is stale) to run continuously in production.
         "schedule": 300.0,
+        "options": {"queue": MAINTENANCE_QUEUE},
     },
     "cleanup-stale-exports": {
         "task": "marriage_ocr_api.exports.cleanup_stale_exports",
@@ -61,11 +68,13 @@ celery_app.conf.beat_schedule = {
         # Submits prepared handwritten jobs and finishes completed Gemini
         # batches. A cheap no-op query when Batch Mode has nothing waiting.
         "schedule": 300.0,
+        "options": {"queue": MAINTENANCE_QUEUE},
     },
     "recover-stale-onedrive-submissions": {
         "task": "marriage_ocr_api.onedrive.recover_stale_submissions",
         # Same cadence as recover-stale-ocr-jobs, for the same reason.
         "schedule": 300.0,
+        "options": {"queue": MAINTENANCE_QUEUE},
     },
 }
 
