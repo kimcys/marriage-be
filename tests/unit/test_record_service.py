@@ -127,10 +127,10 @@ def test_import_records_from_xlsx_flags_low_confidence_for_review(session: Sessi
     assert record.status == RecordStatus.PENDING_REVIEW.value
 
 
-def test_apply_correction_keeps_low_confidence_record_pending_review(session: Session) -> None:
-    """Filling in the one field that was missing shouldn't auto-approve a
-    record the OCR extraction itself was unsure about -- that still needs an
-    explicit reviewer approve/reject, not just a value getting filled in."""
+def test_apply_correction_approves_low_confidence_record_once_fields_are_filled(session: Session) -> None:
+    """A reviewer editing a record has looked at the scan, which is the review
+    low OCR confidence asked for -- so filling in the last missing field
+    approves it instead of leaving it stuck in the queue."""
     job_id = _job(session)
     record = create_record(
         session,
@@ -153,6 +153,32 @@ def test_apply_correction_keeps_low_confidence_record_pending_review(session: Se
     )
 
     assert updated.missing_fields == []
+    assert updated.status == RecordStatus.APPROVED.value
+
+
+def test_apply_correction_keeps_record_pending_while_a_field_is_still_missing(session: Session) -> None:
+    job_id = _job(session)
+    record = create_record(
+        session,
+        job_id=job_id,
+        source_key="page-1-row-2",
+        field_values={"full_name": "Ada Lovelace"},
+        confidence=0.9,
+        validation_issues=[],
+        missing_fields=["ic_number", "age"],
+    )
+    session.commit()
+
+    updated = apply_correction(
+        session,
+        record.id,
+        expected_version=1,
+        field_values={"ic_number": "S1234567"},
+        reviewer="reviewer@example.com",
+        note=None,
+    )
+
+    assert updated.missing_fields == ["age"]
     assert updated.status == RecordStatus.PENDING_REVIEW.value
 
 
@@ -252,3 +278,25 @@ def test_bulk_approve_records(session: Session) -> None:
     bulk_approved = bulk_approve_records(session, [first.id, second.id], reviewer="reviewer@example.com")
 
     assert [record.status for record in bulk_approved] == [RecordStatus.APPROVED.value, RecordStatus.APPROVED.value]
+
+
+def test_import_records_from_csv_keeps_raw_mas_kahwin_out_of_field_values(session: Session, tmp_path: Path) -> None:
+    from marriage_ocr_api.records.importer import import_records_from_csv
+
+    job_id = _job(session)
+    payload = tmp_path / "typed.csv"
+    payload.write_text(
+        "Bil,Nama Suami,Mas Kahwin,Source File,Failed Fields,Mas Kahwin Raw\n"
+        "35/92,Ahmad,,a.pdf,Mas Kahwin,$.80.00\n"
+        "36/92,Ali,RM 80.00,b.pdf,,\n",
+        encoding="utf-8-sig",
+    )
+
+    import_records_from_csv(session, job_id, payload)
+    session.commit()
+
+    by_bil = {r.field_values["Bil"]: r for r in list_records(session, job_id=job_id, batch_id=None, status=None, limit=10, offset=0)}
+    assert "Mas Kahwin Raw" not in by_bil["35/92"].field_values
+    assert by_bil["35/92"].normalized_data["raw"] == {"Mas Kahwin": "$.80.00"}
+    assert by_bil["35/92"].normalized_data["Nama Suami"] == "Ahmad"
+    assert "raw" not in by_bil["36/92"].normalized_data

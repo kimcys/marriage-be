@@ -12,7 +12,7 @@ from marriage_ocr_api.records.repositories import (
     append_revision,
     get_record_or_raise,
 )
-from marriage_ocr_api.records.status import LOW_CONFIDENCE_THRESHOLD, RecordStatus
+from marriage_ocr_api.records.status import RecordStatus
 
 
 def utcnow() -> datetime:
@@ -64,8 +64,11 @@ def apply_correction(
     record.missing_fields = [
         field for field in record.missing_fields if not str(merged_field_values.get(field) or "").strip()
     ]
-    low_confidence = record.confidence is not None and record.confidence < LOW_CONFIDENCE_THRESHOLD
-    resolved_status = RecordStatus.PENDING_REVIEW if record.missing_fields or low_confidence else RecordStatus.APPROVED
+    # Low OCR confidence is deliberately not re-checked here: a reviewer who
+    # just looked at the scan and edited the record has done the review that
+    # low confidence asked for. Only a field that is still empty keeps it
+    # pending -- otherwise corrected records could never leave the queue.
+    resolved_status = RecordStatus.PENDING_REVIEW if record.missing_fields else RecordStatus.APPROVED
     record.status = resolved_status.value
     record.review_status = resolved_status.value
     record.reviewed_by = reviewer

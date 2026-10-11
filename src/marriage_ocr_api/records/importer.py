@@ -31,6 +31,8 @@ _TYPED_METADATA_COLUMNS = {
     "Failed Fields",
     "Retry Count",
     "Error Message",
+    # Kept in OCRRecord.normalized_data["raw"] instead -- see import_records_from_csv.
+    "Mas Kahwin Raw",
 }
 
 # A field marriage-ocr genuinely couldn't fill in (blank in the source
@@ -170,6 +172,14 @@ def _typed_missing_fields(record: dict[str, object]) -> list[str]:
     return _split_semicolon_list(record.get("Failed Fields"))
 
 
+def _typed_normalized_data(record: dict[str, object], field_values: dict[str, object]) -> dict[str, object] | None:
+    # The reader's text before normalization, so a blank "Mas Kahwin" can be
+    # told apart from one the normalizer rejected. None (-> create_record's
+    # usual copy of field_values) for CSVs written before the column existed.
+    raw = str(record.get("Mas Kahwin Raw") or "").strip()
+    return {**field_values, "raw": {"Mas Kahwin": raw}} if raw else None
+
+
 def import_records_from_csv(
     session: Session,
     job_id: UUID,
@@ -230,6 +240,7 @@ def import_records_from_csv(
                     "confidence": None,
                     "validation_issues": _typed_validation_issues(record),
                     "missing_fields": _typed_missing_fields(record),
+                    "normalized_data": _typed_normalized_data(record, field_values),
                 },
             ):
                 created += 1
