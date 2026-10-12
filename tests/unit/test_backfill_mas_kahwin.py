@@ -57,7 +57,7 @@ def test_amount_written_in_words_stays_in_review_with_a_note() -> None:
 
 
 def test_records_with_a_value_or_nothing_readable_are_left_alone() -> None:
-    assert _plan("300.00 (TUNAI)", current="RM 80.00") is None
+    assert _plan("300.00 (TUNAI)", current="RM 80.00", missing=()) is None
     assert _plan("unreadable") is None
     assert _plan("") is None
     assert backfill.plan_update({"Bil": "1"}, None, [], [], normalize=_normalize) is None
@@ -65,3 +65,10 @@ def test_records_with_a_value_or_nothing_readable_are_left_alone() -> None:
 
 def test_junk_starting_with_rm_is_left_for_a_person() -> None:
     assert _plan("RM...") is None
+
+
+def test_value_kept_as_text_but_still_flagged_is_normalized_and_approved() -> None:
+    plan = _plan("300.00 (TUNAI)", current="300.00 (TUNAI)")
+    assert plan["field_values"]["Mas Kahwin"] == "RM 300.00"
+    assert plan["missing_fields"] == []
+    assert plan["status"] == "APPROVED"

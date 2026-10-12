@@ -58,8 +58,9 @@ def plan_update(
     if normalize is None:  # imported here so the function can be unit-tested without marriage-ocr installed
         from marriage_ocr.typed.normalizer import normalize_mas_kahwin_value as normalize
     field_values = dict(field_values or {})
-    if str(field_values.get(FIELD) or "").strip():
-        return None
+    flagged = FIELD in (missing_fields or [])
+    if str(field_values.get(FIELD) or "").strip() and not flagged:
+        return None  # has a value nothing complained about
     raw_block = (normalized_data or {}).get("raw")
     raw = str(raw_block.get(FIELD) or "").strip() if isinstance(raw_block, dict) else ""
     if not raw:
