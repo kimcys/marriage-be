@@ -5,7 +5,9 @@ The reader writes "TIADA MAKLUMAT" (no information) for those and the validators
 flag each one ("invalid husband age", "missing mas kahwin", ...). Such a field cannot be
 completed by anyone, so a record whose every issue is explained by a not-recorded field
 is approved here. A Mas Kahwin the validator rejected only for lacking "RM" is first
-normalized ("80.00" -> "RM 80.00").
+normalized ("80.00" -> "RM 80.00"), and an IC of 12 digits with odd punctuation or spacing
+("740304 - 14 - 5297") is reformatted to YYMMDD-PB-#### ("740304-14-5297"). A nikah date
+the book does not have ("TIADA MAKLUMAT") and an empty keluar date count as not recorded.
 
 DRY RUN BY DEFAULT. Pass --execute to apply. Only HANDWRITTEN_REGISTER records still
 PENDING_REVIEW and untouched by a human (version 1, no reviewer) are considered. A record
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -43,14 +46,28 @@ EXPLAINED_BY = {
     "missing mas kahwin": ["Mas Kahwin"],
     "missing pendaftar name": ["Nama Pendaftar"],
     "missing pendaftar address": ["Alamat Pendaftar"],
+    "invalid nikah date": ["Tarikh Nikah"],
+    "invalid keluar date": ["Tarikh Keluar"],
     "missing wali name": ["Nama Wali"],
     "missing wali relationship": ["Hubungan Wali"],
     "missing saksi 1": ["Saksi 1"],
     "missing saksi 2": ["Saksi 2"],
+}
+# IC issues: explained when each of these fields is not recorded or a valid 12-digit IC after reformatting
+IC_ISSUES = {
     "missing or invalid husband IC": ["IC Baru Suami", "IC Lama Suami"],
     "missing or invalid wife IC": ["IC Baru Isteri", "IC Lama Isteri"],
     "missing both IC values": ["IC Baru Suami", "IC Lama Suami", "IC Baru Isteri", "IC Lama Isteri"],
 }
+
+
+def _format_ic(value: object) -> str | None:
+    """YYMMDD-PB-#### when the value is 12 digits plus punctuation/spaces (no letters), else None."""
+    text = str(value or "")
+    digits = re.sub(r"\D", "", text)
+    if len(digits) != 12 or re.search(r"[A-Za-z]", text):
+        return None
+    return f"{digits[:6]}-{digits[6:8]}-{digits[8:]}"
 
 
 def _not_recorded(value: object) -> bool:
@@ -65,7 +82,7 @@ def plan_update(
     if not issues:
         return None
     field_values = dict(field_values or {})
-    remaining: list[str] = []
+    original_values: dict[str, object] = {}
     for issue in issues:
         if issue == RM_PREFIX_ISSUE:
             if normalize is None:  # lazy: lets the function be unit-tested without marriage-ocr installed
@@ -74,14 +91,24 @@ def plan_update(
             if not amount:
                 return None
             field_values["Mas Kahwin"] = amount
+        elif issue in IC_ISSUES:
+            for field in IC_ISSUES[issue]:
+                if _not_recorded(field_values.get(field)):
+                    continue
+                formatted = _format_ic(field_values.get(field))
+                if formatted is None:
+                    return None
+                if field_values[field] != formatted:
+                    original_values.setdefault(field, field_values[field])
+                    field_values[field] = formatted
         elif issue in EXPLAINED_BY:
             if not all(_not_recorded(field_values.get(field)) for field in EXPLAINED_BY[issue]):
                 return None
         else:
             return None
-    if remaining:
-        return None
     audit = {**(normalized_data or {}), "auto_approved_not_recorded": issues}
+    if original_values:
+        audit["auto_approved_original_values"] = original_values
     return {
         "field_values": field_values,
         "validation_issues": [],
