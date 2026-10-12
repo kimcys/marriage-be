@@ -16,6 +16,7 @@ def _normalize(raw: str) -> str | None:  # stand-in for marriage_ocr's normalize
         "300.00 (TUNAI)": "RM 300.00",
         "1 DINAR EMAS": "1 DINAR EMAS",
         "lapan puluh": "RM 80",
+        "RM...": "RM...",
     }.get(raw)
 
 
@@ -60,3 +61,7 @@ def test_records_with_a_value_or_nothing_readable_are_left_alone() -> None:
     assert _plan("unreadable") is None
     assert _plan("") is None
     assert backfill.plan_update({"Bil": "1"}, None, [], [], normalize=_normalize) is None
+
+
+def test_junk_starting_with_rm_is_left_for_a_person() -> None:
+    assert _plan("RM...") is None

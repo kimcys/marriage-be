@@ -65,8 +65,8 @@ def plan_update(
     if not raw:
         return None
     value = normalize(raw)
-    if not value:
-        return None
+    if not value or (value.startswith("RM") and not value.startswith("RM ")):
+        return None  # junk such as "RM...", "RM-80/=": leave it for a person
     field_values[FIELD] = value
     missing = [field for field in (missing_fields or []) if field != FIELD]
     issues = list(validation_issues or [])
