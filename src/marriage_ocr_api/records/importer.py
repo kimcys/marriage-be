@@ -8,7 +8,9 @@ from uuid import UUID
 import openpyxl
 from sqlalchemy.orm import Session
 
+from marriage_ocr_api.records import not_recorded
 from marriage_ocr_api.records.repositories import create_record_if_missing
+from marriage_ocr_api.records.status import RecordStatus
 
 _METADATA_COLUMNS = {
     "Confidence",
@@ -82,6 +84,7 @@ def import_records_from_xlsx(
     batch_id: UUID | None = None,
     document_id: UUID | None = None,
     override_source_page: int | None = None,
+    auto_approve_not_recorded: bool = False,
 ) -> int:
     """Import OCR records from the marriage-ocr CLI's XLSX output.
 
@@ -133,6 +136,17 @@ def import_records_from_xlsx(
             confidence_raw = record.get("Confidence")
             confidence = float(confidence_raw) if isinstance(confidence_raw, int | float) else None
             _fill_empty_fields_with_placeholder(field_values, _split_semicolon_list(record.get("Missing Fields")))
+            validation_issues = _split_semicolon_list(record.get("Review Reason"))
+            extra_payload: dict[str, object] = {}
+            if auto_approve_not_recorded:
+                resolution = not_recorded.resolve(field_values, validation_issues)
+                if resolution is not None:
+                    field_values = resolution.field_values
+                    validation_issues = []
+                    extra_payload = {
+                        "normalized_data": resolution.normalized_data,
+                        "status": RecordStatus.APPROVED.value,
+                    }
 
             if create_record_if_missing(
                 session,
@@ -145,8 +159,9 @@ def import_records_from_xlsx(
                     "source_record_index": _record_index_from_source_record(source_record),
                     "field_values": field_values,
                     "confidence": confidence,
-                    "validation_issues": _split_semicolon_list(record.get("Review Reason")),
+                    "validation_issues": validation_issues,
                     "missing_fields": [],
+                    **extra_payload,
                 },
             ):
                 created += 1

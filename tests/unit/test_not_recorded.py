@@ -1,14 +1,6 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "approve_not_recorded.py"
-_spec = importlib.util.spec_from_file_location("approve_not_recorded", _SCRIPT)
-approve = importlib.util.module_from_spec(_spec)
-sys.modules["approve_not_recorded"] = approve
-_spec.loader.exec_module(approve)
+from marriage_ocr_api.records import not_recorded
 
 NR = "TIADA MAKLUMAT"
 
@@ -18,14 +10,22 @@ def _fake_normalize(text: str) -> str | None:
 
 
 def _plan(field_values, issues):
-    return approve.plan_update(field_values, issues, {"raw": {}}, normalize=_fake_normalize)
+    resolution = not_recorded.resolve(field_values, issues, {"raw": {}}, normalize_amount=_fake_normalize)
+    if resolution is None:
+        return None
+    return {
+        "field_values": resolution.field_values,
+        "normalized_data": resolution.normalized_data,
+        "status": "APPROVED",
+        "validation_issues": [],
+    }
 
 
 def test_issues_explained_by_not_recorded_fields_are_approved_and_audited() -> None:
     fields = {"Umur Suami": NR, "Umur Isteri": NR, "Mas Kahwin": NR, "Nama Suami": "A"}
     issues = ["invalid husband age", "invalid wife age", "missing mas kahwin"]
     plan = _plan(fields, issues)
-    assert plan["status"] == plan["review_status"] == "APPROVED"
+    assert plan["status"] == "APPROVED"
     assert plan["validation_issues"] == []
     assert plan["normalized_data"]["auto_approved_not_recorded"] == issues
     assert plan["normalized_data"]["raw"] == {}

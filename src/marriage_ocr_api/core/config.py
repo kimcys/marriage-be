@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     # back to "vision" per PDF on any Gemini error. See marriage-ocr's
     # typed/gemini_reader.py.
     typed_reader: str = "vision"
+    # Approve a handwritten-register record without review when every issue is only
+    # that the book never had the data ("TIADA MAKLUMAT"); see records/not_recorded.py.
+    auto_approve_not_recorded: bool = True
     gemini_batch_max_jobs: int = 500
     gemini_batch_fallback_hours: int = 30
     ocr_max_concurrent_jobs: int = 1

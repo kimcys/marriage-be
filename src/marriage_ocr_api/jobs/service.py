@@ -110,6 +110,13 @@ def retry_job(job_id: UUID, session: Session, executor: JobExecutorProtocol) -> 
         raise ApiError(409, "JOB_NOT_RETRYABLE", "Only a failed or cancelled job can be retried.")
 
     job = repositories.mark_pending_for_retry(session, job_id)
+    # A pending job blocks FAILED/CANCELLED at document and batch level, so
+    # recompute now; otherwise a retried job that never finishes leaves its
+    # document (and the whole batch) stuck as FAILED.
+    if job.document_id is not None:
+        recompute_document_status(session, job.document_id)
+    if job.batch_id is not None:
+        recompute_batch_status(session, job.batch_id)
     session.commit()
 
     try:

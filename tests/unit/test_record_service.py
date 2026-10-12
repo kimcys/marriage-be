@@ -351,3 +351,55 @@ def test_import_records_from_csv_keeps_word_amounts_in_review(session: Session, 
     assert any("written in words" in issue for issue in words.validation_issues)
     assert by_bil["6/92"].status == RecordStatus.APPROVED.value  # a normal amount is untouched
     assert by_bil["7/92"].missing_fields == ["Mas Kahwin"]  # no duplicate flag
+
+
+def _register_workbook(path: Path) -> None:
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.append(
+        ["Bil", "Umur Suami", "Mas Kahwin", "Tarikh Nikah", "Confidence", "Review Reason", "Source Record"]
+    )
+    # The book has no age or mas kahwin for this entry: the reader says so, and the validator
+    # then flags both -- which also dragged the confidence under the review threshold.
+    worksheet.append(
+        ["12/93", "TIADA MAKLUMAT", "TIADA MAKLUMAT", "1993-07-08", 0.4, "invalid husband age;missing mas kahwin", "r1"]
+    )
+    worksheet.append(
+        ["13/93", "TIADA MAKLUMAT", "TIADA MAKLUMAT", "1993-0?-08", 0.4, "invalid husband age;invalid nikah date", "r2"]
+    )
+    workbook.save(path)
+
+
+def test_register_record_with_only_not_recorded_issues_is_approved_when_enabled(
+    session: Session, tmp_path: Path
+) -> None:
+    job_id = _job(session)
+    payload = tmp_path / "result.xlsx"
+    _register_workbook(payload)
+
+    import_records_from_xlsx(session, job_id, payload, auto_approve_not_recorded=True)
+    session.commit()
+
+    by_bil = {
+        r.field_values["Bil"]: r
+        for r in list_records(session, job_id=job_id, batch_id=None, status=None, limit=10, offset=0)
+    }
+    cleared = by_bil["12/93"]
+    assert cleared.status == RecordStatus.APPROVED.value
+    assert cleared.validation_issues == []
+    assert cleared.normalized_data["auto_approved_not_recorded"] == ["invalid husband age", "missing mas kahwin"]
+    # an unreadable nikah date is a real problem, not "not recorded": stays in review
+    assert by_bil["13/93"].status == RecordStatus.PENDING_REVIEW.value
+    assert by_bil["13/93"].validation_issues == ["invalid husband age", "invalid nikah date"]
+
+
+def test_register_record_stays_in_review_when_the_rule_is_off(session: Session, tmp_path: Path) -> None:
+    job_id = _job(session)
+    payload = tmp_path / "result.xlsx"
+    _register_workbook(payload)
+
+    import_records_from_xlsx(session, job_id, payload)
+    session.commit()
+
+    records = list_records(session, job_id=job_id, batch_id=None, status=None, limit=10, offset=0)
+    assert {r.status for r in records} == {RecordStatus.PENDING_REVIEW.value}

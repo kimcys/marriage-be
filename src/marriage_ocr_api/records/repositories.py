@@ -175,6 +175,7 @@ def create_record_if_missing(
         confidence=cast(float | None, payload.get("confidence")),
         validation_issues=cast(list[str], validation_issues),
         missing_fields=cast(list[str], missing_fields),
+        status=RecordStatus(str(payload["status"])) if payload.get("status") else None,
     )
     return True
 
