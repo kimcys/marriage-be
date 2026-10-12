@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     ocr_max_concurrent_jobs: int = 1
     ocr_stderr_api_limit: int = 1000
     marriage_ocr_git_url: str = "https://github.com/kimcys/marriage-ocr.git"
-    marriage_ocr_git_ref: str = "c99ed347a1f6748f14d0934315cfe5213cac8a18"
+    marriage_ocr_git_ref: str = "ae0a5747e9385477bb3315c3adeb5752f16ec064"
     google_application_credentials: str = "/run/secrets/google-vision.json"
     gemini_api_key: str = ""
     storage_backend: str = "local"

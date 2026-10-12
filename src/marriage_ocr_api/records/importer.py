@@ -186,7 +186,7 @@ def _flag_amount_read_from_words(
     in the review queue, filled in, with a note to confirm it against the scan."""
     raw = str(record.get("Mas Kahwin Raw") or "").strip()
     value = str(field_values.get("Mas Kahwin") or "").strip()
-    if not (raw and value) or any(char.isdigit() for char in raw):
+    if not (raw and value.startswith("RM")) or any(char.isdigit() for char in raw):
         return issues, missing
     note = f"mas kahwin was written in words ({raw!r}), read as {value}; confirm against the scan"
     return [*issues, note], missing if "Mas Kahwin" in missing else [*missing, "Mas Kahwin"]
