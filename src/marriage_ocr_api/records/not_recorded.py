@@ -1,5 +1,8 @@
 """Auto-resolve handwritten-register issues that exist only because the book never had the data.
 
+A divorce/rujuk entry that only cross-references another register book (the reader marks it
+"not an actual record") is approved as well, with the note kept.
+
 The older register books often record no age, mas kahwin, registrar, IC, wali or saksi, and some
 no nikah date. The reader writes "TIADA MAKLUMAT" (no information) for those and the validators
 flag each one ("invalid husband age", "missing mas kahwin", ...). No reviewer can complete a
@@ -24,6 +27,8 @@ from typing import cast
 
 NOT_RECORDED = frozenset({"", "TIADA MAKLUMAT", "TIADA", "-"})
 RM_PREFIX_ISSUE = "mas kahwin missing RM prefix"
+# The reader's own verdict on an entry that only says "see the other register book".
+CROSS_REFERENCE_ISSUE = "cross-reference note to another register book, not an actual record"
 # issue text -> the fields that must ALL be not-recorded for the issue to be "explained"
 EXPLAINED_BY: dict[str, list[str]] = {
     "invalid husband age": ["Umur Suami"],
@@ -84,6 +89,12 @@ def resolve(
     issues = list(validation_issues or [])
     if not issues:
         return None
+    if all(issue == CROSS_REFERENCE_ISSUE for issue in issues):
+        # Nothing to complete: the entry points at another book. Keep the values and the note.
+        return Resolution(
+            field_values=dict(field_values or {}),
+            normalized_data={**(normalized_data or {}), "auto_approved_not_recorded": issues},
+        )
     values = dict(field_values or {})
     original_values: dict[str, object] = {}
     for issue in issues:

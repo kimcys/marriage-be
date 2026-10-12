@@ -71,3 +71,15 @@ def test_missing_nikah_date_and_empty_keluar_date_count_as_not_recorded() -> Non
     plan = _plan({"Tarikh Nikah": NR, "Tarikh Keluar": ""}, ["invalid nikah date", "invalid keluar date"])
     assert plan["status"] == "APPROVED"
     assert _plan({"Tarikh Nikah": "1993-0?-08"}, ["invalid nikah date"]) is None
+
+
+def test_a_cross_reference_note_alone_is_approved_with_values_unchanged() -> None:
+    fields = {"Bil": "623/09", "Hal Hal Lain": "SILA RUJUK BUKU DAFTAR SALINAN CERAI"}
+    plan = _plan(fields, [not_recorded.CROSS_REFERENCE_ISSUE])
+    assert plan["status"] == "APPROVED"
+    assert plan["field_values"] == fields
+    assert plan["normalized_data"]["auto_approved_not_recorded"] == [not_recorded.CROSS_REFERENCE_ISSUE]
+
+
+def test_a_cross_reference_note_with_another_problem_stays_in_review() -> None:
+    assert _plan({"Nama Suami": "A"}, [not_recorded.CROSS_REFERENCE_ISSUE, "invalid or missing cerai date"]) is None

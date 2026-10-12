@@ -11,7 +11,7 @@ only for lacking "RM" is first normalized ("80.00" -> "RM 80.00"), and an IC of 
 odd punctuation or spacing ("740304 - 14 - 5297") is reformatted to YYMMDD-PB-#### ("740304-14-5297"). A nikah date
 the book does not have ("TIADA MAKLUMAT") and an empty keluar date count as not recorded.
 
-DRY RUN BY DEFAULT. Pass --execute to apply. Only HANDWRITTEN_REGISTER records still
+DRY RUN BY DEFAULT. Pass --execute to apply. Only handwritten records (register, divorce, rujuk) still
 PENDING_REVIEW and untouched by a human (version 1, no reviewer) are considered. A record
 with any other issue (invalid date, an IC that is present but invalid, "Gemini uncertain"
 fields, a cross-reference note, ...) is left in review. The issues cleared are kept in
@@ -66,7 +66,7 @@ def main() -> None:
         select(OCRRecord)
         .join(OCRJob, OCRRecord.job_id == OCRJob.id)
         .where(
-            OCRJob.document_type == "HANDWRITTEN_REGISTER",
+            OCRJob.document_type.like("HANDWRITTEN_%"),
             OCRRecord.status == RecordStatus.PENDING_REVIEW.value,
             OCRRecord.version == 1,
             OCRRecord.reviewed_by.is_(None),

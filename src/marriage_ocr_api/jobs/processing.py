@@ -127,7 +127,7 @@ def complete_job(
                 document_id=job.document_id,
                 override_source_page=job.page_number,
                 auto_approve_not_recorded=settings.auto_approve_not_recorded
-                and job.document_type == DocumentType.HANDWRITTEN_REGISTER.value,
+                and job.document_type.startswith("HANDWRITTEN_"),
             )
         if job.document_id is not None:
             recompute_document_status(session, job.document_id)
