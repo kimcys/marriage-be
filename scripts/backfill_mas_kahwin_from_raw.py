@@ -85,10 +85,13 @@ def plan_update(
     issues = list(validation_issues or [])
     if value.startswith("RM") and not any(char.isdigit() for char in raw):
         note = f"mas kahwin was written in words ({raw!r}), read as {value}; confirm against the scan"
-        issues.append(note)
-        missing.append(FIELD)
+        if note not in issues:
+            issues.append(note)
+        if FIELD not in missing:
+            missing.append(FIELD)
     elif not missing and set(issues) <= {GENERIC_ISSUE}:
         issues = []
+    issues = list(dict.fromkeys(issues))  # never the same note twice
     status = RecordStatus.PENDING_REVIEW if (missing or issues) else RecordStatus.APPROVED
     return {
         "field_values": field_values,

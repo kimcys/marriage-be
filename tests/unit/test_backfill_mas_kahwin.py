@@ -88,3 +88,16 @@ def test_a_flagged_value_the_rules_now_refuse_is_cleared_and_stays_in_review() -
     assert plan["missing_fields"] == ["Mas Kahwin"]
     assert all("read as RM 20" not in issue for issue in plan["validation_issues"])
     assert any("could not be read" in issue for issue in plan["validation_issues"])
+
+
+def test_running_it_twice_does_not_repeat_the_words_note() -> None:
+    first = _plan("lapan puluh")
+    again = backfill.plan_update(
+        first["field_values"],
+        {"raw": {"Mas Kahwin": "lapan puluh"}},
+        first["missing_fields"],
+        first["validation_issues"],
+        normalize=_normalize,
+    )
+    assert again["validation_issues"] == first["validation_issues"]
+    assert again["missing_fields"] == ["Mas Kahwin"]
