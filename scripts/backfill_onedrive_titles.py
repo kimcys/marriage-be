@@ -21,6 +21,7 @@ from sqlalchemy import select
 
 from marriage_ocr_api.core.config import get_settings
 from marriage_ocr_api.db.session import get_session_factory
+from marriage_ocr_api.db import models as _all_models  # noqa: F401 - registers every table so FKs resolve
 from marriage_ocr_api.onedrive.models import OneDriveSubmission
 from marriage_ocr_api.onedrive.runner import OneDriveFetchRunner
 
