@@ -83,3 +83,19 @@ def test_a_cross_reference_note_alone_is_approved_with_values_unchanged() -> Non
 
 def test_a_cross_reference_note_with_another_problem_stays_in_review() -> None:
     assert _plan({"Nama Suami": "A"}, [not_recorded.CROSS_REFERENCE_ISSUE, "invalid or missing cerai date"]) is None
+
+
+def test_a_row_with_no_data_whose_remarks_point_at_another_book_is_approved() -> None:
+    fields = {"Bil": "7/2004", "Nama Suami": NR, "Nama Isteri": NR, "IC Suami": NR, "IC Isteri": NR, "Tarikh Cerai": NR}
+    for note in ("RUJUK BUKU CERAI SALINAN YE", "SILA RUJUK BUKU SALINAN", "- Sama -"):
+        plan = _plan({**fields, "Hal Hal Lain": note}, ["missing husband name", "missing wife name"])
+        assert plan is not None and plan["status"] == "APPROVED"
+
+
+def test_a_row_with_no_data_and_no_such_remark_stays_in_review() -> None:
+    fields = {"Bil": "7/2004", "Nama Suami": NR, "Nama Isteri": NR, "IC Suami": NR, "IC Isteri": NR, "Tarikh Cerai": NR}
+    assert _plan(fields, ["missing husband name"]) is None
+    assert _plan({**fields, "Hal Hal Lain": "017-5548186"}, ["missing husband name"]) is None
+    assert _plan({**fields, "Hal Hal Lain": "BATAL"}, ["missing husband name"]) is None
+    # a row that does have a name is never treated as a pointer
+    assert _plan({**fields, "Nama Suami": "A", "Hal Hal Lain": "RUJUK BUKU"}, ["missing wife name"]) is None

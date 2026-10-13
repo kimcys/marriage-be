@@ -51,6 +51,12 @@ IC_ISSUES: dict[str, list[str]] = {
 }
 
 
+# A divorce/rujuk row with no name, IC or date whose remarks only point at another register book
+# ("RUJUK BUKU CERAI SALINAN", "- SAMA -"): the data lives in that book, not on this page.
+_HOLLOW_FIELDS = ("Nama Suami", "Nama Isteri", "IC Suami", "IC Isteri", "Tarikh Cerai", "Tarikh Rujuk")
+_POINTS_AT_OTHER_BOOK = re.compile(r"RUJUK|SALINAN|^\W*SAMA\W*$", re.IGNORECASE)
+
+
 @dataclass(frozen=True)
 class Resolution:
     field_values: dict[str, object]
@@ -59,6 +65,15 @@ class Resolution:
 
 def _not_recorded(value: object) -> bool:
     return str(value or "").strip().upper() in NOT_RECORDED
+
+
+def _is_pointer_to_other_book(values: dict[str, object]) -> bool:
+    note = str(values.get("Hal Hal Lain") or "").strip()
+    return (
+        bool(note)
+        and _POINTS_AT_OTHER_BOOK.search(note) is not None
+        and all(_not_recorded(values.get(field)) for field in _HOLLOW_FIELDS)
+    )
 
 
 def format_ic(value: object) -> str | None:
@@ -96,6 +111,11 @@ def resolve(
             normalized_data={**(normalized_data or {}), "auto_approved_not_recorded": issues},
         )
     values = dict(field_values or {})
+    if _is_pointer_to_other_book(values):
+        return Resolution(
+            field_values=values,
+            normalized_data={**(normalized_data or {}), "auto_approved_not_recorded": issues},
+        )
     original_values: dict[str, object] = {}
     for issue in issues:
         if issue == RM_PREFIX_ISSUE:
