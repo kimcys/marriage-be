@@ -94,7 +94,6 @@ def test_a_row_with_no_data_whose_remarks_point_at_another_book_is_approved() ->
 
 def test_a_row_with_no_data_but_other_remarks_stays_in_review() -> None:
     fields = {"Bil": "7/2004", "Nama Suami": NR, "Nama Isteri": NR, "IC Suami": NR, "IC Isteri": NR, "Tarikh Cerai": NR}
-    assert _plan({**fields, "Hal Hal Lain": "017-5548186"}, ["missing husband name"]) is None
     assert _plan({**fields, "Hal Hal Lain": "BATAL"}, ["missing husband name"]) is None
     # a row that does have a name is never treated as a pointer
     assert _plan({**fields, "Nama Suami": "A", "Hal Hal Lain": "RUJUK BUKU"}, ["missing wife name"]) is None
@@ -116,7 +115,17 @@ def test_a_numbered_row_nobody_filled_in_is_approved_as_a_blank_entry() -> None:
 
 def test_a_row_with_anything_besides_the_bil_is_not_a_blank_entry() -> None:
     blank = {"Bil": "125/08", "Nama Suami": NR, "Nama Isteri": NR}
-    assert _plan({**blank, "Hal Hal Lain": "017-5548186"}, ["missing husband name"]) is None
+    assert _plan({**blank, "Hal Hal Lain": "BATAL"}, ["missing husband name"]) is None
     assert _plan({**blank, "Tarikh Keluar": "6/3/2008"}, ["missing husband name"]) is None
     assert _plan({**blank, "Nama Suami": "A"}, ["missing wife name"]) is None
     assert _plan({"Nama Suami": NR}, ["missing husband name"]) is None  # no Bil at all: not a numbered entry
+
+
+def test_a_row_with_only_a_phone_number_is_a_split_off_copy_and_is_approved() -> None:
+    row = {"Bil": "784/13", "Nama Suami": NR, "Nama Isteri": NR, "IC Suami": NR, "Hal Hal Lain": "017-3369865"}
+    for phone in ("017-3369865", "012 3071224.", "0102570065", "010-233-1129"):
+        plan = _plan({**row, "Hal Hal Lain": phone}, ["missing husband name", "missing wife name"])
+        assert plan is not None and plan["status"] == "APPROVED"
+    # a phone number alongside any other real value, or text mixed in, still goes to review
+    assert _plan({**row, "Tarikh Keluar": "6/3/2008"}, ["missing husband name"]) is None
+    assert _plan({**row, "Hal Hal Lain": "017-3369865 BATAL"}, ["missing husband name"]) is None

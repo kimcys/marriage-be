@@ -68,11 +68,25 @@ def _not_recorded(value: object) -> bool:
     return str(value or "").strip().upper() in NOT_RECORDED
 
 
+_PHONE_ONLY = re.compile(r"[\d\s\-+()/.]{6,}")
+
+
 def _is_blank_entry(values: dict[str, object]) -> bool:
-    """A numbered row nobody ever filled in: a Bil and nothing else (checked against 10 real scans)."""
+    """A numbered row with nothing to enter: a Bil and nothing else, or a Bil and a phone number.
+
+    Checked against 18 real scans: the first is an entry nobody filled in; the second is a copy the
+    reader split off the second line of a real entry (the wife's phone number), whose real data is
+    in the entry above it.
+    """
     if not str(values.get("Bil") or "").strip():
         return False
-    return all(_not_recorded(value) for key, value in values.items() if key not in ("Bil", "Record Type"))
+    for key, value in values.items():
+        if key in ("Bil", "Record Type") or _not_recorded(value):
+            continue
+        if key == "Hal Hal Lain" and _PHONE_ONLY.fullmatch(str(value).strip()):
+            continue
+        return False
+    return True
 
 
 def _is_pointer_to_other_book(values: dict[str, object]) -> bool:
