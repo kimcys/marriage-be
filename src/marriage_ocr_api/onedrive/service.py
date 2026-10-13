@@ -183,6 +183,7 @@ def build_submission_response(submission: OneDriveSubmission) -> OneDriveSubmiss
         id=submission.id,
         batch_id=submission.batch_id,
         url=submission.url,
+        title=submission.title,
         status=OneDriveSubmissionStatus(submission.status),
         skipped_files=skipped_files,
         created_at=submission.created_at,
@@ -656,6 +657,27 @@ def _route(classification: Classification) -> DocumentType | str:
     return CLASSIFICATION_TO_DOCUMENT_TYPE.get(route_key) or "UNKNOWN_ROUTABLE_COMBINATION"
 
 
+def _store_title_safe(
+    session_factory: sessionmaker[Session] | SessionFactory,
+    runner: OneDriveFetchRunner,
+    submission_id: UUID,
+    url: str,
+) -> None:
+    """Resolve and save the link's folder name. Purely cosmetic, so any
+    failure is logged and swallowed -- it must never fail the fetch."""
+    try:
+        title = runner.resolve_title(url)
+        if not title:
+            return
+        with session_factory() as session:
+            submission = repositories.get_submission(session, submission_id)
+            if submission is not None:
+                submission.title = title[:512]
+                session.commit()
+    except Exception:
+        logger.warning("could not resolve title for onedrive submission %s", submission_id, exc_info=True)
+
+
 def run_onedrive_fetch(
     submission_id: UUID,
     settings: Settings,
@@ -686,6 +708,8 @@ def run_onedrive_fetch(
                 return
             session.commit()
         heartbeat = _Heartbeat(session_factory, submission_id).start()
+
+        _store_title_safe(session_factory, runner, submission_id, url)
 
         work_dir = _submission_work_dir(settings, submission_id)
         dest_dir = work_dir / "downloaded"

@@ -938,6 +938,17 @@
           "status": {
             "$ref": "#/components/schemas/OneDriveSubmissionStatus"
           },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",

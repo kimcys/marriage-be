@@ -141,6 +141,42 @@ def test_run_onedrive_fetch_routes_a_routable_file_and_submits_its_job(tmp_path:
     check_session.close()
 
 
+class _TitledFetchRunner(FakeFetchRunner):
+    def __init__(self, title: str | None, *, raises: bool = False) -> None:
+        super().__init__(files={}, classifications={})
+        self._title = title
+        self._raises = raises
+
+    def resolve_title(self, url: str) -> str | None:
+        if self._raises:
+            raise OneDriveFetchError("resolve-title exited with code 1")
+        return self._title
+
+
+@pytest.mark.parametrize(
+    ("runner", "expected"),
+    [
+        (_TitledFetchRunner("BUKU DAFTAR NIKAH 2014"), "BUKU DAFTAR NIKAH 2014"),
+        (_TitledFetchRunner(None), None),
+        (_TitledFetchRunner(None, raises=True), None),
+    ],
+)
+def test_run_onedrive_fetch_stores_title_and_never_fails_on_it(tmp_path: Path, runner, expected) -> None:
+    session_factory = sessionmaker(bind=_engine(), expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!titled")
+    session.commit()
+    session.close()
+
+    run_onedrive_fetch(submission.id, Settings(storage_root=tmp_path), session_factory, FakeJobExecutor(), runner)
+
+    with session_factory() as check_session:
+        updated = get_submission(check_session, submission.id)
+        assert updated.status == OneDriveSubmissionStatus.FETCHED.value
+        assert updated.title == expected
+
+
 def test_ingest_one_file_success_removes_the_staged_source(tmp_path: Path) -> None:
     """Once the Document/Job rows are durably committed, the OneDrive-staged
     original is redundant -- and must be removed so a future submission

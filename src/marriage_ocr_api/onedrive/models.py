@@ -46,3 +46,7 @@ class OneDriveSubmission(Base):
     # deploy) has been resumed automatically -- see onedrive/repositories.py::
     # resume_or_fail_stale_fetching_submissions. Reset once it completes.
     fetch_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # The share link's folder/file name as OneDrive shows it, resolved once
+    # (see OneDriveFetchRunner.resolve_title) so the portal can label the
+    # otherwise opaque 1drv.ms URL. Null until resolved or if it can't be.
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)

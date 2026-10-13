@@ -35,6 +35,7 @@ class OneDriveSubmissionResponse(BaseModel):
     id: UUID
     batch_id: UUID
     url: str
+    title: str | None = None
     status: OneDriveSubmissionStatus
     skipped_files: list[SkippedFile] | None
     created_at: datetime

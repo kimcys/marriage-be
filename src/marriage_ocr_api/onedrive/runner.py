@@ -99,6 +99,20 @@ class OneDriveFetchRunner:
                 f"onedrive fetch-public exited with code {result.returncode}", stderr=result.stderr
             )
 
+    def resolve_title(self, url: str) -> str | None:
+        """The share link's folder/file name, resolved without downloading
+        anything (marriage-ocr `onedrive resolve-title`). None if unknown."""
+        result = self._run(["onedrive", "resolve-title", "--url", url])
+        if result.returncode != 0:
+            raise OneDriveFetchError(
+                f"onedrive resolve-title exited with code {result.returncode}", stderr=result.stderr
+            )
+        try:
+            title = json.loads(result.stdout).get("title")
+        except (json.JSONDecodeError, AttributeError) as exc:
+            raise OneDriveFetchError(f"onedrive resolve-title produced bad output: {exc}") from exc
+        return title or None
+
     def classify_stack(self, file_paths: list[Path]) -> list[Classification]:
         """One Vision classify for up to 3 single-image files (marriage-ocr
         `classify-stack`); results in `file_paths` order. Raises ClassifyError
