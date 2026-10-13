@@ -234,6 +234,15 @@ def _ingest_one_file(
     document_type: DocumentType,
     page1_ocr_source: Path | None = None,
 ) -> UUID:
+    # marriage-ocr's process-typed only reads PDFs; an image that classifies as
+    # typed (e.g. a photographed certificate) would otherwise create a job that
+    # fails identically on every retry. Skip it so it can be classified by hand.
+    if document_type in TYPED_DOCUMENT_TYPES and source_path.suffix.lower() != ".pdf":
+        raise UploadValidationError(
+            422,
+            "TYPED_REQUIRES_PDF",
+            f"{source_path.name} was classified as a typed document, but typed documents must be PDFs.",
+        )
     document_id = uuid4()
     paths = document_paths(settings.storage_root, batch_id, document_id, source_path.suffix or ".pdf")
     original_filename = source_path.name

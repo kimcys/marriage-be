@@ -291,6 +291,47 @@ def test_run_onedrive_fetch_skips_unroutable_files_without_creating_documents(tm
     check_session.close()
 
 
+def test_run_onedrive_fetch_skips_an_image_classified_as_typed(tmp_path: Path) -> None:
+    engine = _engine()
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    session = session_factory()
+    batch = create_batch(session, name="Batch 1", description=None, created_by=None)
+    submission = create_submission(session, batch_id=batch.id, url="https://1drv.ms/f/s!typedjpg")
+    session.commit()
+    session.close()
+
+    runner = FakeFetchRunner(
+        files={"photo.jpg": b"not-a-real-image"},
+        classifications={
+            "photo.jpg": Classification(
+                doc_type="typed",
+                record_type="nikah",
+                layout_variant="modern",
+                status="ROUTABLE",
+                config_path="config/typed_nikah_modern.yaml",
+            )
+        },
+        unique_bytes=False,
+    )
+    job_executor = FakeJobExecutor()
+
+    run_onedrive_fetch(submission.id, Settings(storage_root=tmp_path), session_factory, job_executor, runner)
+
+    check_session = session_factory()
+    updated = get_submission(check_session, submission.id)
+    assert updated.status == OneDriveSubmissionStatus.FETCHED.value
+    assert updated.skipped_files == [
+        {
+            "filename": "photo.jpg",
+            "status": "TYPED_REQUIRES_PDF",
+            "storage_key": f"onedrive/{submission.id}/skipped/photo.jpg",
+        }
+    ]
+    assert list_documents(check_session, batch.id, limit=10, offset=0) == []
+    assert job_executor.submitted == []
+    check_session.close()
+
+
 _ROUTABLE_NIKAH_LEGACY = Classification(
     doc_type="handwritten",
     record_type="nikah",
