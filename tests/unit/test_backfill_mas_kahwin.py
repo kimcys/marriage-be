@@ -17,6 +17,7 @@ def _normalize(raw: str) -> str | None:  # stand-in for marriage_ocr's normalize
         "1 DINAR EMAS": "1 DINAR EMAS",
         "lapan puluh": "RM 80",
         "RM...": "RM...",
+        "Sepuluh Puluh": None,
     }.get(raw)
 
 
@@ -72,3 +73,18 @@ def test_value_kept_as_text_but_still_flagged_is_normalized_and_approved() -> No
     assert plan["field_values"]["Mas Kahwin"] == "RM 300.00"
     assert plan["missing_fields"] == []
     assert plan["status"] == "APPROVED"
+
+
+def test_a_flagged_value_the_rules_now_refuse_is_cleared_and_stays_in_review() -> None:
+    plan = backfill.plan_update(
+        {"Bil": "319/90", "Mas Kahwin": "RM 20"},
+        {"raw": {"Mas Kahwin": "Sepuluh Puluh"}},
+        ["Mas Kahwin"],
+        ["mas kahwin was written in words ('Sepuluh Puluh'), read as RM 20; confirm against the scan"],
+        normalize=_normalize,
+    )
+    assert plan["field_values"]["Mas Kahwin"] == ""
+    assert plan["status"] == "PENDING_REVIEW"
+    assert plan["missing_fields"] == ["Mas Kahwin"]
+    assert all("read as RM 20" not in issue for issue in plan["validation_issues"])
+    assert any("could not be read" in issue for issue in plan["validation_issues"])

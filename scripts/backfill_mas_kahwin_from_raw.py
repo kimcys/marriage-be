@@ -66,6 +66,18 @@ def plan_update(
     if not raw:
         return None
     value = normalize(raw)
+    if not value and flagged and str(field_values.get(FIELD) or "").strip():
+        # A value an earlier, looser reading put there that the current rules refuse ("Sepuluh Puluh"
+        # read as RM 20, a bare "RM"): clear it so a wrong amount is not left standing, keep it in review.
+        issues = [i for i in (validation_issues or []) if "written in words" not in str(i)]
+        issues.append(f"mas kahwin {raw!r} could not be read as an amount; confirm against the scan")
+        return {
+            "field_values": {**field_values, FIELD: ""},
+            "missing_fields": list(missing_fields or []),
+            "validation_issues": issues,
+            "status": RecordStatus.PENDING_REVIEW.value,
+            "review_status": RecordStatus.PENDING_REVIEW.value,
+        }
     if not value or (value.startswith("RM") and not value.startswith("RM ")):
         return None  # junk such as "RM...", "RM-80/=": leave it for a person
     field_values[FIELD] = value
