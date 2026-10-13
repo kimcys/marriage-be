@@ -92,10 +92,31 @@ def test_a_row_with_no_data_whose_remarks_point_at_another_book_is_approved() ->
         assert plan is not None and plan["status"] == "APPROVED"
 
 
-def test_a_row_with_no_data_and_no_such_remark_stays_in_review() -> None:
+def test_a_row_with_no_data_but_other_remarks_stays_in_review() -> None:
     fields = {"Bil": "7/2004", "Nama Suami": NR, "Nama Isteri": NR, "IC Suami": NR, "IC Isteri": NR, "Tarikh Cerai": NR}
-    assert _plan(fields, ["missing husband name"]) is None
     assert _plan({**fields, "Hal Hal Lain": "017-5548186"}, ["missing husband name"]) is None
     assert _plan({**fields, "Hal Hal Lain": "BATAL"}, ["missing husband name"]) is None
     # a row that does have a name is never treated as a pointer
     assert _plan({**fields, "Nama Suami": "A", "Hal Hal Lain": "RUJUK BUKU"}, ["missing wife name"]) is None
+
+
+def test_a_numbered_row_nobody_filled_in_is_approved_as_a_blank_entry() -> None:
+    blank = {
+        "Bil": "125/08",
+        "Record Type": "CERAI",
+        "Nama Suami": NR,
+        "Nama Isteri": NR,
+        "IC Suami": NR,
+        "Tarikh Cerai": NR,
+    }
+    plan = _plan(blank, ["missing husband name", "missing wife name"])
+    assert plan is not None and plan["status"] == "APPROVED"
+    assert plan["field_values"] == blank
+
+
+def test_a_row_with_anything_besides_the_bil_is_not_a_blank_entry() -> None:
+    blank = {"Bil": "125/08", "Nama Suami": NR, "Nama Isteri": NR}
+    assert _plan({**blank, "Hal Hal Lain": "017-5548186"}, ["missing husband name"]) is None
+    assert _plan({**blank, "Tarikh Keluar": "6/3/2008"}, ["missing husband name"]) is None
+    assert _plan({**blank, "Nama Suami": "A"}, ["missing wife name"]) is None
+    assert _plan({"Nama Suami": NR}, ["missing husband name"]) is None  # no Bil at all: not a numbered entry

@@ -1,7 +1,8 @@
 """Auto-resolve handwritten-register issues that exist only because the book never had the data.
 
 A divorce/rujuk entry that only cross-references another register book (the reader marks it
-"not an actual record") is approved as well, with the note kept.
+"not an actual record") is approved as well, with the note kept. So is a divorce/rujuk row that
+only points at another book, and a numbered row that was never filled in (a Bil and nothing else).
 
 The older register books often record no age, mas kahwin, registrar, IC, wali or saksi, and some
 no nikah date. The reader writes "TIADA MAKLUMAT" (no information) for those and the validators
@@ -67,6 +68,13 @@ def _not_recorded(value: object) -> bool:
     return str(value or "").strip().upper() in NOT_RECORDED
 
 
+def _is_blank_entry(values: dict[str, object]) -> bool:
+    """A numbered row nobody ever filled in: a Bil and nothing else (checked against 10 real scans)."""
+    if not str(values.get("Bil") or "").strip():
+        return False
+    return all(_not_recorded(value) for key, value in values.items() if key not in ("Bil", "Record Type"))
+
+
 def _is_pointer_to_other_book(values: dict[str, object]) -> bool:
     note = str(values.get("Hal Hal Lain") or "").strip()
     return (
@@ -111,7 +119,7 @@ def resolve(
             normalized_data={**(normalized_data or {}), "auto_approved_not_recorded": issues},
         )
     values = dict(field_values or {})
-    if _is_pointer_to_other_book(values):
+    if _is_pointer_to_other_book(values) or _is_blank_entry(values):
         return Resolution(
             field_values=values,
             normalized_data={**(normalized_data or {}), "auto_approved_not_recorded": issues},
