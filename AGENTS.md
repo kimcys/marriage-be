@@ -95,8 +95,7 @@ Follow it for new domains. Routers declare their own `/api/v1/...` prefix; every
 
 1. A user creates a **Batch** (`POST /api/v1/batches`, with name plus optional daerah/negeri location).
 2. Documents arrive **only** through OneDrive share links: `POST /api/v1/batches/{id}/onedrive-links`. There is no
-   direct upload endpoint (the README is authoritative; `docs/frontend-integration.md` still mentions an upload
-   section that is stale). A repeat POST of the same URL returns the existing submission unchanged.
+   direct upload endpoint. A repeat POST of the same URL returns the existing submission unchanged.
 3. A Celery task (`onedrive.fetch_submission`) downloads the link via marriage-ocr (`onedrive fetch-public`, with a
    browser fallback), **classifies** every file (`classify` / `classify-stack`; up to 3 single images per Vision call,
    `ONEDRIVE_CLASSIFY_STACK_SIZE`), and creates a Document + OCR Job per routable file. Mixed types in one link are
