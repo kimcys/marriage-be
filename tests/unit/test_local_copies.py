@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -129,3 +131,51 @@ def test_cleanup_refuses_without_object_storage(monkeypatch, tmp_path, capsys) -
     monkeypatch.setattr(clean_local_copies, "get_settings", lambda: Settings(storage_root=tmp_path))
     assert clean_local_copies.main([]) == 2
     assert "Refusing" in capsys.readouterr().err
+
+
+def test_cleanup_does_not_ask_object_storage_about_documents_with_no_local_copy(session_factory, tmp_path) -> None:
+    session = session_factory()
+    settings = Settings(storage_root=tmp_path, storage_backend="s3")
+    gone, _ = _document_job(session, tmp_path)
+    for directory in (tmp_path / "batches", tmp_path / "jobs"):
+        shutil.rmtree(directory, ignore_errors=True)
+
+    class CountingStorage(FakeStorage):
+        calls = 0
+
+        def exists(self, key: str) -> bool:
+            self.calls += 1
+            return super().exists(key)
+
+    storage = CountingStorage(set())
+    removable, skipped = clean_local_copies.plan(settings, session, storage)
+
+    assert removable == [] and skipped == {} and storage.calls == 0
+    assert gone.id is not None
+
+
+def test_cleanup_command_runs_the_cleanup_off_the_control_thread(monkeypatch, tmp_path) -> None:
+    from marriage_ocr_api.maintenance import tasks as maintenance_tasks
+
+    started = threading.Event()
+    monkeypatch.setattr(maintenance_tasks, "clean_this_workers_disk", started.set)
+
+    assert maintenance_tasks.clean_local_copies_now(object()) == {"ok": "started"}
+    assert started.wait(timeout=5)
+
+
+def test_a_second_cleanup_is_skipped_while_one_is_running(monkeypatch, tmp_path) -> None:
+    from marriage_ocr_api.maintenance import tasks as maintenance_tasks
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        maintenance_tasks, "get_settings", lambda: calls.append("run") or Settings(storage_root=tmp_path)
+    )
+    assert maintenance_tasks._running.acquire(blocking=False)
+    try:
+        maintenance_tasks.clean_this_workers_disk()
+    finally:
+        maintenance_tasks._running.release()
+    maintenance_tasks.clean_this_workers_disk()  # not s3: returns after reading settings
+
+    assert calls == ["run"]

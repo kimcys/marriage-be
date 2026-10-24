@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_init
 
 from marriage_ocr_api.core.config import get_settings
@@ -76,8 +77,18 @@ celery_app.conf.beat_schedule = {
         "schedule": 300.0,
         "options": {"queue": MAINTENANCE_QUEUE},
     },
+    "clean-local-copies": {
+        "task": "marriage_ocr_api.maintenance.broadcast_local_cleanup",
+        # Fans out to every worker, which clears its own disk of copies already
+        # safe in object storage (maintenance/tasks.py). A fixed time, not
+        # "every 24h": an interval restarts whenever beat is recreated, and a
+        # deploy that often would mean it never fires. 19:00 UTC is 03:00 MYT.
+        "schedule": crontab(minute=0, hour=19),
+        "options": {"queue": MAINTENANCE_QUEUE},
+    },
 }
 
 from marriage_ocr_api.exports import tasks as export_tasks  # noqa: E402,F401
 from marriage_ocr_api.jobs import tasks  # noqa: E402,F401  (registers @celery_app.task defs)
+from marriage_ocr_api.maintenance import tasks as maintenance_tasks  # noqa: E402,F401
 from marriage_ocr_api.onedrive import tasks as onedrive_tasks  # noqa: E402,F401

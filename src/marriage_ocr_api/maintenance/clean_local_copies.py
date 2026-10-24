@@ -9,12 +9,14 @@ copies (see storage/local_copies.py). Anything unfinished, failed, or not
 confirmed in object storage is left untouched. Refuses to run unless
 STORAGE_BACKEND=s3 -- with local storage those files are the originals.
 New jobs clean up after themselves (jobs/processing.py::complete_job); this
-is for what accumulated before that existed.
+is for what accumulated before that existed, and for what that best-effort
+cleanup missed. maintenance/tasks.py runs it daily on every worker.
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -49,6 +51,16 @@ def plan(
         if not jobs:
             skipped["no jobs"] += 1
             continue
+        # Look at this worker's disk before asking object storage anything:
+        # every worker runs this daily and holds copies of only a fraction of
+        # the documents, and confirming each one in Spaces first meant a HEAD
+        # request per document in the database (~80 minutes for 24k documents).
+        dirs = {storage_root / "batches" / str(document.batch_id) / "documents" / str(document.id)}
+        for job in jobs:
+            dirs.update(local_roots_for_job(settings, job))
+        existing = [d for d in dirs if d.exists()]
+        if not existing:
+            continue
         if any(job.status != JobStatus.COMPLETED.value for job in jobs):
             skipped["not every job completed"] += 1
             continue
@@ -58,18 +70,25 @@ def plan(
         if any(not job.output_relative_path or not storage.exists(job.output_relative_path) for job in jobs):
             skipped["an output not in object storage"] += 1
             continue
-        dirs = {storage_root / "batches" / str(document.batch_id) / "documents" / str(document.id)}
-        for job in jobs:
-            dirs.update(local_roots_for_job(settings, job))
-        existing = [d for d in dirs if d.exists()]
-        if existing:
-            removable.append((str(document.id), existing))
+        removable.append((str(document.id), existing))
     return removable, dict(skipped)
 
 
-def main(argv: list[str] | None = None) -> int:
-    import shutil
+def clean(
+    settings: Settings, session: Session, storage: StorageService, *, apply: bool
+) -> tuple[int, int, dict[str, int]]:
+    """(documents, bytes, skip counts): what was removed, or would be."""
+    removable, skipped = plan(settings, session, storage)
+    total = 0
+    for _, dirs in removable:
+        for directory in dirs:
+            total += directory_size(directory)
+            if apply:
+                shutil.rmtree(directory, ignore_errors=True)
+    return len(removable), total, skipped
 
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--apply", action="store_true", help="actually delete (default: dry run)")
     parser.add_argument(
@@ -89,16 +108,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.batch_helpers:
         return _clean_batch_helpers(settings, storage, apply=args.apply)
     with get_session_factory(settings)() as session:
-        removable, skipped = plan(settings, session, storage)
-    total = 0
-    for _, dirs in removable:
-        for directory in dirs:
-            size = directory_size(directory)
-            total += size
-            if args.apply:
-                shutil.rmtree(directory, ignore_errors=True)
+        documents, total, skipped = clean(settings, session, storage, apply=args.apply)
     verb = "Removed" if args.apply else "Would remove"
-    print(f"{verb} local copies for {len(removable)} document(s): {total / 1e9:.2f} GB")
+    print(f"{verb} local copies for {documents} document(s): {total / 1e9:.2f} GB")
     for reason, count in sorted(skipped.items()):
         print(f"  left untouched ({reason}): {count}")
     if not args.apply:

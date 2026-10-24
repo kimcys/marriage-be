@@ -11,7 +11,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_scheduler_tasks_run_on_the_maintenance_queue() -> None:
     schedule = celery_app.conf.beat_schedule
-    for name in ("gemini-batch-tick", "recover-stale-ocr-jobs", "recover-stale-onedrive-submissions"):
+    for name in (
+        "gemini-batch-tick",
+        "recover-stale-ocr-jobs",
+        "recover-stale-onedrive-submissions",
+        "clean-local-copies",
+    ):
         assert schedule[name]["options"] == {"queue": MAINTENANCE_QUEUE}, name
     # Everything else keeps the default queue.
     assert "options" not in schedule["cleanup-stale-exports"]
