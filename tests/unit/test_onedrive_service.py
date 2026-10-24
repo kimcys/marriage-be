@@ -26,6 +26,7 @@ from marriage_ocr_api.onedrive.repositories import (
 from marriage_ocr_api.onedrive.runner import Classification, ClassifyError, OneDriveFetchError
 from marriage_ocr_api.onedrive.service import (
     _apply_neighbor_fallback,
+    _apply_nikah_batch_fallback,
     _ingest_one_file,
     build_submission_response,
     classify_skipped_file,
@@ -419,6 +420,37 @@ def test_apply_neighbor_fallback_never_touches_a_confidently_unroutable_status()
     ]
     result = _apply_neighbor_fallback(classified)
     assert result[1][1].status == "SKIPPED_JAWI"
+
+
+def test_nikah_batch_fallback_routes_an_unknown_page_as_handwritten_nikah() -> None:
+    # Unlike neighbour fallback this needs no routable page next to it, so it
+    # also covers a run of unknowns at the start/end of the batch.
+    classified = [(Path("page1.jpg"), _UNKNOWN), (Path("page2.jpg"), _ROUTABLE_CERAI_MODERN)]
+    result = _apply_nikah_batch_fallback(classified, "Certificate NIKAH Petaling")
+    routed = result[0][1]
+    assert (routed.doc_type, routed.record_type, routed.layout_variant, routed.status) == (
+        "handwritten",
+        "nikah",
+        "legacy",
+        "ROUTABLE",
+    )
+    assert result[1][1] is _ROUTABLE_CERAI_MODERN
+
+
+def test_nikah_batch_fallback_ignores_batches_without_nikah_in_the_name() -> None:
+    classified = [(Path("page1.jpg"), _UNKNOWN)]
+    assert _apply_nikah_batch_fallback(classified, "Certificate Cerai Petaling") == classified
+
+
+def test_nikah_batch_fallback_leaves_jawi_and_failed_classifications_alone() -> None:
+    jawi = Classification(
+        doc_type="unknown", record_type=None, layout_variant=None, status="SKIPPED_JAWI", config_path=None
+    )
+    failed = Classification(
+        doc_type="unknown", record_type=None, layout_variant=None, status="CLASSIFY_FAILED", config_path=None
+    )
+    classified = [(Path("page1.jpg"), jawi), (Path("page2.jpg"), failed)]
+    assert _apply_nikah_batch_fallback(classified, "Nikah Shah Alam") == classified
 
 
 def test_run_onedrive_fetch_routes_a_file_via_neighbour_fallback(tmp_path: Path) -> None:

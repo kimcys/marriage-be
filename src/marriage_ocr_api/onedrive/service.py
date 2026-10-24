@@ -24,6 +24,7 @@ from marriage_ocr_api.batches.models import Document
 from marriage_ocr_api.batches.repositories import (
     create_document,
     find_document_by_sha256,
+    get_batch,
     recompute_batch_status,
     recompute_document_status,
 )
@@ -657,6 +658,41 @@ def _apply_neighbor_fallback(
     return result
 
 
+def _batch_name(session: Session, batch_id: UUID) -> str:
+    batch = get_batch(session, batch_id)
+    return batch.name if batch is not None else ""
+
+
+def _apply_nikah_batch_fallback(
+    classified: list[tuple[Path, Classification]], batch_name: str
+) -> list[tuple[Path, Classification]]:
+    """Reviewers kept classifying every NEEDS_MANUAL_CLASSIFICATION file in a
+    Nikah batch as handwritten Nikah by hand, so do it here: a batch whose
+    name contains "nikah" is a Nikah ledger, and the classifier giving up on
+    a page of it (doc_type="unknown") is the continuation-page case that
+    neighbour fallback can't resolve (a run at the start/end of the batch,
+    or neighbours that disagree). Only NEEDS_MANUAL_CLASSIFICATION is
+    touched: Jawi pages, duplicates and CLASSIFY_FAILED keep their status."""
+    if "nikah" not in batch_name.lower():
+        return classified
+    result = list(classified)
+    for i, (file_path, classification) in enumerate(result):
+        if classification.doc_type != "unknown" or classification.status != "NEEDS_MANUAL_CLASSIFICATION":
+            continue
+        logger.info("onedrive classify: routing %s as handwritten Nikah (Nikah batch)", file_path.name)
+        result[i] = (
+            file_path,
+            Classification(
+                doc_type="handwritten",
+                record_type="nikah",
+                layout_variant="legacy",
+                status="ROUTABLE",
+                config_path=None,
+            ),
+        )
+    return result
+
+
 def _route(classification: Classification) -> DocumentType | str:
     """The DocumentType a classification ingests as, or the skip status to
     record when it can't be routed."""
@@ -709,6 +745,7 @@ def run_onedrive_fetch(
                 return
             batch_id = submission.batch_id
             url = submission.url
+            batch_name = _batch_name(session, batch_id)
             if not repositories.claim_for_fetch(session, submission_id, _utcnow(), STALE_HEARTBEAT_SECONDS):
                 # Another run holds it (fresh heartbeat), or it's already
                 # done -- this is a duplicate task (see claim_for_fetch).
@@ -778,6 +815,7 @@ def run_onedrive_fetch(
                 classified.append((file_path, result))
 
             classified = _apply_neighbor_fallback(classified)
+            classified = _apply_nikah_batch_fallback(classified, batch_name)
 
             for file_path, classification in classified:
                 document_type = _route(classification)
@@ -1233,6 +1271,7 @@ def run_skipped_files_reclassify(
             if submission is None:
                 return
             batch_id = submission.batch_id
+            batch_name = _batch_name(session, batch_id)
             entries = {
                 item["filename"]: dict(item) for item in submission.skipped_files or [] if _is_reclassifiable(item)
             }
@@ -1279,6 +1318,7 @@ def run_skipped_files_reclassify(
                 )
 
         classified = _apply_neighbor_fallback(classified)
+        classified = _apply_nikah_batch_fallback(classified, batch_name)
 
         ingested = 0
         with session_factory() as session:
