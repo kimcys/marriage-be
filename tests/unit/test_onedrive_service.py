@@ -1079,6 +1079,27 @@ def test_reclassify_ingests_files_whose_classify_had_failed(tmp_path: Path) -> N
     session.close()
 
 
+def test_reclassify_also_covers_ingest_failed_files(tmp_path: Path) -> None:
+    # A worker with a full disk marked every file it tried to ingest
+    # INGEST_FAILED; their preserved bytes are fine, so they classify again.
+    session_factory, settings, batch, submission = _submission_with_classify_failed_files(tmp_path, ["image00001.pdf"])
+    session = session_factory()
+    update_skipped_file(session, submission.id, "image00001.pdf", {"status": "INGEST_FAILED"})
+    session.commit()
+    reclassify_skipped_files(session, submission.id, FakeOneDriveExecutor())
+    session.close()
+
+    runner = FakeFetchRunner(files={}, classifications={"image00001.pdf": _classification()})
+    job_executor = FakeJobExecutor()
+    run_skipped_files_reclassify(submission.id, settings, session_factory, job_executor, runner)
+
+    session = session_factory()
+    assert get_submission(session, submission.id).skipped_files is None
+    assert len(list_documents(session, batch.id, limit=10, offset=0)) == 1
+    assert len(job_executor.submitted) == 1
+    session.close()
+
+
 def test_reclassify_updates_status_of_files_that_still_dont_route(tmp_path: Path) -> None:
     session_factory, settings, _, submission = _submission_with_classify_failed_files(
         tmp_path, ["image00001.pdf", "image00002.pdf"]

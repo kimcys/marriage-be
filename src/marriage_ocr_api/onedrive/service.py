@@ -101,6 +101,8 @@ _REFETCH_FAILED = "FAILED"
 # usually environmental (e.g. a worker that couldn't read the Google Vision
 # key), and NEEDS_MANUAL_CLASSIFICATION can resolve via neighbour fallback
 # once the pages around it classify (see reclassify_skipped_files).
+# INGEST_FAILED is the same story: a worker with a full disk failed every file
+# it ingested, and the only way back was classifying each one by hand.
 # Jawi-only pages are skipped completely: never routed by neighbour
 # fallback, never offered for manual classification, never reclassified.
 _SKIPPED_JAWI = "SKIPPED_JAWI"
@@ -109,7 +111,7 @@ _SKIPPED_JAWI = "SKIPPED_JAWI"
 # its bytes aren't stored again. Never classifiable or reclassifiable.
 _DUPLICATE = "DUPLICATE"
 _NOT_CLASSIFIABLE_STATUSES = frozenset({_SKIPPED_JAWI, _DUPLICATE})
-_RECLASSIFIABLE_STATUSES = frozenset({"CLASSIFY_FAILED", "NEEDS_MANUAL_CLASSIFICATION"})
+_RECLASSIFIABLE_STATUSES = frozenset({"CLASSIFY_FAILED", "NEEDS_MANUAL_CLASSIFICATION", "INGEST_FAILED"})
 
 
 class SessionFactory(Protocol):
@@ -1211,8 +1213,8 @@ def reclassify_skipped_files(
     session: Session, submission_id: UUID, executor: OneDriveExecutorProtocol
 ) -> OneDriveSubmission:
     """Queue a re-run of auto-classification over a FETCHED submission's
-    CLASSIFY_FAILED / NEEDS_MANUAL_CLASSIFICATION skipped files (see
-    run_skipped_files_reclassify). retry_submission only covers FAILED
+    CLASSIFY_FAILED / NEEDS_MANUAL_CLASSIFICATION / INGEST_FAILED skipped files
+    (see run_skipped_files_reclassify). retry_submission only covers FAILED
     submissions, and classify_skipped_file needs a human to pick each
     file's type -- neither helps when a whole link's files were skipped
     because classify itself was broken at the time. The submission is
