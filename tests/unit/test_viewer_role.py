@@ -47,7 +47,6 @@ WRITE_ROUTES = [
     ("POST", "/api/v1/batches", {"name": "Fake batch"}),
     ("PATCH", f"/api/v1/batches/{uuid4()}", {"name": "Renamed"}),
     ("POST", f"/api/v1/batches/{uuid4()}/cancel", None),
-    ("POST", "/api/v1/exports", {"format": "CSV"}),
     ("PATCH", f"/api/v1/records/{uuid4()}", {"fields": {}}),
     ("POST", f"/api/v1/records/{uuid4()}/approve", None),
     ("POST", "/api/v1/records/bulk-approve", {"record_ids": []}),

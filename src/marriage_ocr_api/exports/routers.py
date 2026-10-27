@@ -9,7 +9,7 @@ from starlette.responses import Response
 from marriage_ocr_api.activity.repositories import record_activity
 from marriage_ocr_api.api.dependencies import get_db_session, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.auth.dependencies import require_admin, require_user, require_writer
+from marriage_ocr_api.auth.dependencies import require_admin, require_user
 from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.batches.repositories import count_exports, get_batch, get_export, list_exports
 from marriage_ocr_api.core.config import Settings
@@ -59,7 +59,7 @@ def create_one_export(
     payload: ExportCreateRequest,
     session: Session = Depends(get_db_session),
     settings: Settings = Depends(settings_dependency),
-    user: User = Depends(require_writer),
+    user: User = Depends(require_user),
 ) -> ExportResponse:
     batch = get_batch(session, payload.batch_id)
     if batch is None:
