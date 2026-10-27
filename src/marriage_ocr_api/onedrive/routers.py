@@ -15,7 +15,7 @@ from marriage_ocr_api.api.dependencies import (
     settings_dependency,
 )
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.auth.dependencies import require_admin, require_user
+from marriage_ocr_api.auth.dependencies import require_admin, require_writer
 from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.batches.repositories import get_batch
 from marriage_ocr_api.core.config import Settings
@@ -84,7 +84,7 @@ def submit_onedrive_link(
     payload: OneDriveLinkCreateRequest,
     session: Session = Depends(get_db_session),
     executor: OneDriveExecutorProtocol = Depends(get_onedrive_executor),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> JSONResponse:
     batch = get_batch(session, batch_id)
     if batch is None:
@@ -160,7 +160,7 @@ def retry_onedrive_link(
     submission_id: UUID,
     session: Session = Depends(get_db_session),
     executor: OneDriveExecutorProtocol = Depends(get_onedrive_executor),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> OneDriveSubmissionResponse:
     batch = get_batch(session, batch_id)
     if batch is None:
@@ -203,7 +203,7 @@ def classify_skipped_onedrive_file(
     settings: Settings = Depends(settings_dependency),
     job_executor: JobExecutorProtocol = Depends(get_job_executor),
     onedrive_executor: OneDriveExecutorProtocol = Depends(get_onedrive_executor),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> OneDriveSubmissionResponse:
     """Lets a reviewer pick the document type for a file that came back
     NEEDS_MANUAL_CLASSIFICATION (or any other non-ROUTABLE skip reason) --
@@ -263,7 +263,7 @@ def reclassify_skipped_onedrive_files(
     submission_id: UUID,
     session: Session = Depends(get_db_session),
     executor: OneDriveExecutorProtocol = Depends(get_onedrive_executor),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> JSONResponse:
     """Re-runs auto-classification in the background over this link's
     CLASSIFY_FAILED / NEEDS_MANUAL_CLASSIFICATION skipped files, ingesting

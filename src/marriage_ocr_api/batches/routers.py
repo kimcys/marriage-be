@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from marriage_ocr_api.activity.repositories import record_activity
 from marriage_ocr_api.api.dependencies import get_db_session, settings_dependency
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.auth.dependencies import require_admin, require_user
+from marriage_ocr_api.auth.dependencies import require_admin, require_writer
 from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.batches.repositories import (
     count_batches,
@@ -64,7 +64,7 @@ def _batch_not_found(batch_id: UUID) -> ApiError:
 def create_one_batch(
     payload: BatchCreateRequest,
     session: Session = Depends(get_db_session),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> BatchResponse:
     batch = create_batch(
         session,
@@ -129,7 +129,7 @@ def rename_one_batch(
     batch_id: UUID,
     payload: BatchRenameRequest,
     session: Session = Depends(get_db_session),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> BatchResponse:
     existing = get_batch(session, batch_id)
     before = (
@@ -187,7 +187,7 @@ def delete_one_batch(
 def cancel_one_batch_processing(
     batch_id: UUID,
     session: Session = Depends(get_db_session),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> BatchResponse:
     """Stops the batch's in-flight OCR processing -- every PENDING job is
     skipped and every PROCESSING job's subprocess is killed. Safe to call

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from marriage_ocr_api.activity.repositories import record_activity
 from marriage_ocr_api.api.dependencies import get_db_session
 from marriage_ocr_api.api.errors import ApiError
-from marriage_ocr_api.auth.dependencies import require_admin, require_user
+from marriage_ocr_api.auth.dependencies import require_admin, require_writer
 from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.batches.repositories import (
     get_batch_location,
@@ -263,7 +263,7 @@ def patch_record(
     record_id: UUID,
     payload: RecordCorrectionRequest,
     session: Session = Depends(get_db_session),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> RecordResponse:
     try:
         before = dict(get_record_or_raise(session, record_id).field_values)
@@ -309,7 +309,7 @@ def approve_one_record(
     record_id: UUID,
     payload: RecordReviewRequest,
     session: Session = Depends(get_db_session),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> RecordResponse:
     try:
         record = approve_record(
@@ -340,7 +340,7 @@ def approve_one_record(
 def bulk_approve(
     payload: BulkApproveRequest,
     session: Session = Depends(get_db_session),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> BulkApproveResponse:
     try:
         # Always the logged-in user -- payload.reviewer is free text any

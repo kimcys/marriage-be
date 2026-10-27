@@ -1620,7 +1620,8 @@
       "Role": {
         "enum": [
           "ADMIN",
-          "REVIEWER"
+          "REVIEWER",
+          "VIEWER"
         ],
         "title": "Role",
         "type": "string"

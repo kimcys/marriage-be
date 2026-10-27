@@ -47,6 +47,12 @@ def require_user(
     return user
 
 
+def require_writer(user: User = Depends(require_user)) -> User:
+    if user.role == Role.VIEWER.value:
+        raise ApiError(403, "FORBIDDEN", "This account is read-only.")
+    return user
+
+
 def require_admin(user: User = Depends(require_user)) -> User:
     if user.role != Role.ADMIN.value:
         raise ApiError(403, "FORBIDDEN", "This action requires the admin role.")

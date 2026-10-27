@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from marriage_ocr_api.activity.repositories import record_activity
 from marriage_ocr_api.api.dependencies import get_db_session, get_job_executor, settings_dependency
-from marriage_ocr_api.auth.dependencies import require_user
+from marriage_ocr_api.auth.dependencies import require_writer
 from marriage_ocr_api.auth.models import User
 from marriage_ocr_api.core.config import Settings
 from marriage_ocr_api.jobs.schemas import JobResponse, PaginatedJobs
@@ -43,7 +43,7 @@ def retry_one_job(
     request: Request,
     job_id: UUID,
     session: Session = Depends(get_db_session),
-    user: User = Depends(require_user),
+    user: User = Depends(require_writer),
 ) -> JobResponse:
     job = retry_job(job_id, session, get_job_executor(request))
     record_activity(
